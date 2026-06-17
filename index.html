@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lehra</title>
+  <meta name="description"
+    content="A beautiful web-based Indian classical lehra and raga practice player. Choose your instrument, taal, raag, and tempo." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Inter:wght@300;400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+  <!-- Ambient Background Orbs -->
+  <div class="bg-orb orb-1"></div>
+  <div class="bg-orb orb-2"></div>
+  <div class="bg-orb orb-3"></div>
+
+  <!-- Header -->
+  <header class="site-header">
+    <div class="logo">
+      <svg class="logo-icon" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="20" cy="20" r="18" stroke="url(#grad)" stroke-width="2" />
+        <path d="M14 28V14l14 7-14 7z" fill="url(#grad)" />
+        <defs>
+          <linearGradient id="grad" x1="0" y1="0" x2="40" y2="40">
+            <stop offset="0%" stop-color="#f5a623" />
+            <stop offset="100%" stop-color="#e8572a" />
+          </linearGradient>
+        </defs>
+      </svg>
+      <div>
+        <span class="logo-title">Lehra Studio</span>
+        <span class="logo-sub">Indian Classical Practice</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <button id="statsBtn" class="header-icon-btn" title="Riyaz Tracker">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 20V10M12 20V4M6 20v-6"/>
+        </svg>
+      </button>
+      <div class="pitch-wrap">
+        <label class="pitch-label" for="pitchSelect">Scale</label>
+        <select id="pitchSelect" class="pitch-select">
+          <option value="92.5">F# (low)</option>
+          <option value="98.0">G</option>
+          <option value="103.83">G#</option>
+          <option value="110.0">A</option>
+          <option value="116.54">A#</option>
+          <option value="123.47">B</option>
+          <option value="130.81">C</option>
+          <option value="138.59">C#</option>
+          <option value="146.83" selected>D (Original)</option>
+          <option value="155.56">D#</option>
+          <option value="164.81">E</option>
+          <option value="174.61">F</option>
+          <option value="185.0">F# (high)</option>
+          <option value="196.0">G (high)</option>
+        </select>
+        <div class="fine-tune-wrap">
+          <input type="number" id="fineTuneHz" class="fine-tune-input" value="146.83" step="0.5"
+            title="Fine Tune Frequency (Hz)">
+          <span class="fine-tune-unit">Hz</span>
+        </div>
+      </div>
+      <div class="header-badge" id="loadingBadge">Web Player</div>
+    </div>
+  </header>
+
+  <!-- Main App -->
+  <main class="app-container">
+
+    <!-- Now Playing Card -->
+    <section class="now-playing-card" id="nowPlayingCard">
+      <div class="np-visual">
+        <div class="np-mandala" id="mandala">
+          <svg viewBox="0 0 200 200" class="mandala-svg">
+            <g transform="translate(100,100)">
+              <circle r="90" fill="none" stroke="rgba(245,166,35,0.08)" stroke-width="1" />
+              <circle r="70" fill="none" stroke="rgba(245,166,35,0.12)" stroke-width="1" />
+              <circle r="50" fill="none" stroke="rgba(245,166,35,0.18)" stroke-width="1" />
+              <circle r="30" fill="none" stroke="rgba(245,166,35,0.25)" stroke-width="1" />
+              <circle r="12" fill="rgba(245,166,35,0.3)" />
+              <g class="mandala-rotate">
+                <g opacity="0.6">
+                  <ellipse cx="0" cy="-60" rx="8" ry="20" fill="rgba(245,166,35,0.4)" transform="rotate(0)" />
+                  <ellipse cx="0" cy="-60" rx="8" ry="20" fill="rgba(245,166,35,0.4)" transform="rotate(45)" />
+                  <ellipse cx="0" cy="-60" rx="8" ry="20" fill="rgba(245,166,35,0.4)" transform="rotate(90)" />
+                  <ellipse cx="0" cy="-60" rx="8" ry="20" fill="rgba(245,166,35,0.4)" transform="rotate(135)" />
+                  <ellipse cx="0" cy="-60" rx="8" ry="20" fill="rgba(245,166,35,0.4)" transform="rotate(180)" />
+                  <ellipse cx="0" cy="-60" rx="8" ry="20" fill="rgba(245,166,35,0.4)" transform="rotate(225)" />
+                  <ellipse cx="0" cy="-60" rx="8" ry="20" fill="rgba(245,166,35,0.4)" transform="rotate(270)" />
+                  <ellipse cx="0" cy="-60" rx="8" ry="20" fill="rgba(245,166,35,0.4)" transform="rotate(315)" />
+                </g>
+              </g>
+            </g>
+          </svg>
+        </div>
+        <div class="np-waveform">
+          <canvas id="waveCanvas" width="300" height="60"></canvas>
+        </div>
+        <button id="fullscreenBtn" class="header-icon-btn" style="position: absolute; top: 16px; left: 16px;" title="Fullscreen Mode">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+          </svg>
+        </button>
+      </div>
+      <div class="np-info">
+        <p class="np-label">Now Playing</p>
+        <h1 class="np-raag" id="npRaag">Select a Raag</h1>
+        <p class="np-details" id="npDetails">Choose instrument, taal &amp; tempo to begin</p>
+        <div class="np-tags" id="npTags">
+          <span class="tag" id="tagInstrument">—</span>
+          <span class="tag" id="tagTaal">—</span>
+          <span class="tag" id="tagBeats">—</span>
+          <span class="tag" id="tagTempo">—</span>
+          <span class="tag tag-pitch" id="tagPitch">D</span>
+        </div>
+        <div class="matra-row" id="matraRow" style="display:none">
+          <div class="matra-display">
+            <span class="matra-label">Matra</span>
+            <span class="matra-number" id="matraCounter">1</span>
+            <span class="matra-sep">/</span>
+            <span class="matra-total" id="matraTotal">16</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Controls Grid -->
+    <section class="controls-grid">
+
+      <!-- Instrument Selector -->
+      <div class="control-panel" id="instrumentPanel">
+        <div class="panel-header">
+          <h2 class="panel-title">Instrument</h2>
+        </div>
+        <div class="selector-list" id="instrumentList"></div>
+      </div>
+
+      <!-- Taal Selector -->
+      <div class="control-panel" id="taalPanel">
+        <div class="panel-header">
+          <h2 class="panel-title">Taal</h2>
+        </div>
+        <div class="selector-list" id="taalList">
+          <p class="empty-hint">← Select an instrument first</p>
+        </div>
+      </div>
+
+      <!-- Raag Selector -->
+      <div class="control-panel" id="raagPanel">
+        <div class="panel-header">
+          <h2 class="panel-title">Raag</h2>
+        </div>
+        <div class="selector-list" id="raagList">
+          <p class="empty-hint">← Select a taal first</p>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Tempo + Playback -->
+    <section class="playback-section">
+
+      <div class="tempo-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Tempo</h2>
+          <span class="tempo-range-label" id="tempoRangeLabel"></span>
+        </div>
+
+        <div class="tempo-presets" id="tempoPills">
+          <p class="empty-hint">Select instrument → taal → raag</p>
+        </div>
+
+        <div class="tempo-slider-wrap" id="tempoSliderWrap" style="display:none">
+          <div class="tempo-slider-row">
+            <button class="btn-bpm-step" id="bpmMinus" title="Decrease BPM">−</button>
+            <div class="slider-track-wrap">
+              <input type="range" id="tempoSlider" min="0" max="210" value="105" class="tempo-slider" />
+              <div class="slider-ticks" id="sliderTicks"></div>
+            </div>
+            <button class="btn-bpm-step" id="bpmPlus" title="Increase BPM">+</button>
+          </div>
+        </div>
+
+        <div class="tempo-display-row">
+          <div class="tempo-display">
+            <span id="tempoValue">—</span>
+            <span class="tempo-unit">BPM</span>
+          </div>
+          <button class="btn-tap" id="tapTempoBtn" title="Tap Tempo">TAP</button>
+        </div>
+      </div>
+
+      <div class="playback-controls">
+        <!-- Volume Controls -->
+        <div class="volume-row">
+          <label class="vol-label">
+            <span class="vol-name">Lehra</span>
+            <div class="vol-slider-wrap">
+              <input type="range" id="lehraVol" min="0" max="100" value="80" class="vol-slider" />
+            </div>
+            <span id="lehraVolVal" class="vol-val">80%</span>
+          </label>
+          <label class="vol-label">
+            <span class="vol-name">Tanpura</span>
+            <div class="vol-slider-wrap">
+              <input type="range" id="tanpuraVol" min="0" max="100" value="50" class="vol-slider" />
+            </div>
+            <span id="tanpuraVolVal" class="vol-val">50%</span>
+          </label>
+          <label class="vol-label">
+            <span class="vol-name">Metronome</span>
+            <div class="vol-slider-wrap">
+              <input type="range" id="metronomeVol" min="0" max="100" value="60" class="vol-slider" />
+            </div>
+            <span id="metronomeVolVal" class="vol-val">60%</span>
+          </label>
+        </div>
+
+        <!-- Transport Buttons -->
+        <div class="transport">
+          <button class="btn-transport btn-stop" id="stopBtn" title="Stop">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <rect x="5" y="5" width="14" height="14" rx="2" />
+            </svg>
+          </button>
+          <button class="btn-transport btn-play" id="playBtn" title="Play / Pause">
+            <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            <svg id="pauseIcon" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+              <rect x="6" y="4" width="4" height="16" rx="1" />
+              <rect x="14" y="4" width="4" height="16" rx="1" />
+            </svg>
+          </button>
+          <button class="btn-transport btn-loop active" id="loopBtn" title="Toggle Loop">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M17 17H7V14l-4 4 4 4v-3h12v-6h-2v4zM7 7h10v3l4-4-4-4v3H5v6h2V7z" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- Options Toggles -->
+        <div class="options-row">
+          <div style="display:flex; align-items:center;">
+            <label class="toggle-label" title="Play a click track on every beat">
+              <input type="checkbox" id="metronomeToggle" class="toggle-checkbox">
+              <span class="toggle-slider"></span>
+              <span class="toggle-text">Metronome</span>
+            </label>
+            <select id="metronomeSoundSelect" class="pitch-select" style="padding: 3px 24px 3px 8px; font-size: 0.65rem; margin-left: 12px; border-radius: 4px; background-position: right 6px center; background-size: 8px;">
+              <option value="classic">Classic</option>
+              <option value="beep">Digital Beep</option>
+              <option value="woodblock">Woodblock</option>
+            </select>
+          </div>
+          <label class="toggle-label" title="Prevent screen from turning off during playback">
+            <input type="checkbox" id="wakeLockToggle" class="toggle-checkbox" checked>
+            <span class="toggle-slider"></span>
+            <span class="toggle-text">Keep Screen Awake</span>
+          </label>
+          <button id="fxBtn" class="header-icon-btn" style="margin-left:8px;" title="Studio Effects (EQ & Reverb)">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+            <span style="font-size: 0.7rem; margin-left:6px; color: inherit;">Studio FX</span>
+          </button>
+        </div>
+
+        <!-- Beat Visualizer -->
+        <div class="beat-visualizer">
+          <div class="beat-label">Beat Indicator</div>
+          <div class="beat-dots" id="beatDots"></div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Info Bar -->
+    <footer class="info-bar">
+      <div class="info-item">
+        <span class="info-dot" id="infoDot"></span>
+        <span id="statusText">Ready — select a raag to begin</span>
+      </div>
+      <div class="info-item shortcuts-hint">
+        Shortcuts: Space = Play/Pause, ↑↓ = Tempo
+      </div>
+      <div class="info-item">
+        <span>Indian Classical Lehra Player</span>
+      </div>
+    </footer>
+
+  </main>
+
+  <!-- Hidden tanpura audio element -->
+  <audio id="tanpuraAudio" src="/assets/tanpura_06_01.wav" loop crossorigin="anonymous" preload="none"></audio>
+
+  <!-- Studio Effects Modal -->
+  <div id="fxModal" class="modal-overlay">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="panel-title">Studio Effects</h2>
+        <button class="modal-close" id="fxClose">&times;</button>
+      </div>
+      <div class="fx-sliders">
+        <label class="vol-label" style="margin-bottom: 16px;">
+          <span class="vol-name">Bass</span>
+          <div class="vol-slider-wrap">
+            <input type="range" id="fxBass" min="-12" max="12" value="0" class="vol-slider" />
+          </div>
+          <span id="fxBassVal" class="vol-val">0dB</span>
+        </label>
+        <label class="vol-label" style="margin-bottom: 16px;">
+          <span class="vol-name">Treble</span>
+          <div class="vol-slider-wrap">
+            <input type="range" id="fxTreble" min="-12" max="12" value="0" class="vol-slider" />
+          </div>
+          <span id="fxTrebleVal" class="vol-val">0dB</span>
+        </label>
+        <label class="vol-label">
+          <span class="vol-name">Reverb</span>
+          <div class="vol-slider-wrap">
+            <input type="range" id="fxReverb" min="0" max="100" value="0" class="vol-slider" />
+          </div>
+          <span id="fxReverbVal" class="vol-val">0%</span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Riyaz Stats Modal -->
+  <div id="statsModal" class="modal-overlay">
+    <div class="modal-content" style="max-width: 500px;">
+      <div class="modal-header">
+        <h2 class="panel-title">Riyaz Tracker</h2>
+        <button class="modal-close" id="statsClose">&times;</button>
+      </div>
+      <div id="statsChart" class="stats-chart">
+        <!-- Bars generated via JS -->
+      </div>
+      <div style="text-align: center; margin-top: 16px; font-size: 0.8rem; color: var(--text-sub);">
+        Total Today: <span id="statsTotalToday" style="color: var(--gold); font-weight: bold;">0m</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="catalogue.js"></script>
+  <script src="app.js"></script>
+</body>
+
+</html>

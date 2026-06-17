@@ -1,0 +1,1198 @@
+/**
+ * Lehra Studio — app.js
+ *
+ * AUDIO ARCHITECTURE (matching Android LehraApp / LehraAudioEngineWrapper):
+ * ─────────────────────────────────────────────────────────────────────────
+ * The native Android app:
+ *   1. Pre-decodes all .aac → .wav files at startup (LehraResourceLoader.java)
+ *   2. Feeds raw WAV samples into the C++ engine via ProcessAudioNative()
+ *   3. Engine does internal time-stretching + pitch shifting in C++
+ *   4. pitchCoeff = TuningCoeff × (146.83 / selectedHz) applied at sample level
+ *
+ * Our web equivalent (zero phase vocoder — zero buzz):
+ *   1. Python server pre-processes audio with librosa.effects.pitch_shift()
+ *   2. Client fetches pre-pitched WAV from /api/audio?file=X&hz=Y
+ *   3. AudioBufferSourceNode plays at playbackRate = bpm / presetBpm ONLY
+ *   4. NO Tone.js, NO PitchShift node, NO phase vocoder artifacts
+ *
+ * The only rate change is for tempo, which the native engine also does.
+ * This is exactly how the app sounds.
+ *
+ * PITCH TABLE (UIMain.java pitchRecords array):
+ *   F#=92.5  G=98.0  G#=103.83  A=110.0  A#=116.54  B=123.47
+ *   C=130.81  C#=138.59  D=146.83(base)  D#=155.56  E=164.81  F=174.61
+ *   F#hi=185.0  Ghi=196.0
+ */
+
+'use strict';
+
+const $ = id => document.getElementById(id);
+
+// ── Base pitch (the pitch all recordings were made at) ──────────
+const BASE_HZ = 146.83; // D
+
+// ── App State ───────────────────────────────────────────────────
+const state = {
+  instrument: null,
+  taal: null,
+  taalData: null,
+  raag: null,
+  bpm: 90,
+  isPlaying: false,
+  isLooping: true,
+  pitchHz: BASE_HZ,
+
+  // Beat / Matra tracking
+  beatIndex: 0,
+  matraCount: 0,
+  beatInterval: null,
+  matraInterval: null,
+
+  // Tap tempo
+  tapTimes: [],
+
+  // Waveform
+  waveFrame: null,
+
+  // Options
+  metronomeEnabled: false,
+  metronomeSound: 'classic',
+  wakeLockEnabled: true,
+
+  // Riyaz
+  riyazStart: 0,
+};
+
+// ── Web Audio (pure, no Tone.js) ─────────────────────────────────
+let audioCtx = null;
+let gainLehra = null;
+let masterCompressor = null;
+
+// Studio FX Nodes
+let fxMasterMix = null;
+let filterBass = null;
+let filterTreble = null;
+let reverbNode = null;
+let dryGainNode = null;
+let wetGainNode = null;
+let analyserNode = null;
+
+let gainTanpura = null;
+
+// Current playing source
+let lehraBuffer = null;      // decoded AudioBuffer (cached per URL)
+let lehraBufferUrl = null;   // the URL it was fetched from
+let lehraSource = null;      // current AudioBufferSourceNode
+let activeSegment = null;    // { presetBpm, start, duration, end }
+let isLoading = false;
+let loadedBpm = null;        // The BPM the currently loaded buffer was perfectly stretched to
+let debounceTimer = null;
+
+let tanpuraBuffer = null;
+let tanpuraBufferHz = null;
+let tanpuraSource = null;
+
+let gainMetronome = null;
+let metronomeBuffer = null;
+let metronomeUpBuffer = null;
+let nextNoteTime = 0;
+
+// Tanpura (simple <audio> element — no processing needed, kept for compatibility but no longer used for playback)
+const tanpuraEl = $('tanpuraAudio');
+
+// Canvas
+const canvas = $('waveCanvas');
+const ctx2d = canvas ? canvas.getContext('2d') : null;
+
+function generateReverbIR(ctx, duration=2, decay=2.0) {
+  const rate = ctx.sampleRate;
+  const length = rate * duration;
+  const impulse = ctx.createBuffer(2, length, rate);
+  const left = impulse.getChannelData(0);
+  const right = impulse.getChannelData(1);
+  for (let i = 0; i < length; i++) {
+    const n = Math.pow(1 - i / length, decay);
+    left[i] = (Math.random() * 2 - 1) * n;
+    right[i] = (Math.random() * 2 - 1) * n;
+  }
+  return impulse;
+}
+
+// ── Ensure Audio Context ─────────────────────────────────────────
+async function ensureAudioCtx() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  // FX Chain setup
+  fxMasterMix = audioCtx.createGain();
+  filterBass = audioCtx.createBiquadFilter();
+  filterBass.type = 'lowshelf';
+  filterBass.frequency.value = 200;
+  
+  filterTreble = audioCtx.createBiquadFilter();
+  filterTreble.type = 'highshelf';
+  filterTreble.frequency.value = 3000;
+
+  reverbNode = audioCtx.createConvolver();
+  reverbNode.buffer = generateReverbIR(audioCtx, 2.5, 3.0);
+  
+  dryGainNode = audioCtx.createGain();
+  dryGainNode.gain.value = 1;
+  wetGainNode = audioCtx.createGain();
+  wetGainNode.gain.value = 0;
+
+  analyserNode = audioCtx.createAnalyser();
+  analyserNode.fftSize = 256;
+
+  // Master compressor
+  masterCompressor = audioCtx.createDynamicsCompressor();
+  masterCompressor.threshold.setValueAtTime(-15, audioCtx.currentTime);
+  masterCompressor.knee.setValueAtTime(20, audioCtx.currentTime);
+  masterCompressor.ratio.setValueAtTime(10, audioCtx.currentTime);
+  masterCompressor.attack.setValueAtTime(0.005, audioCtx.currentTime);
+  masterCompressor.release.setValueAtTime(0.1, audioCtx.currentTime);
+
+  // Routing
+  // fxMasterMix -> Bass -> Treble
+  fxMasterMix.connect(filterBass);
+  filterBass.connect(filterTreble);
+  
+  // Split to Dry and Reverb
+  filterTreble.connect(dryGainNode);
+  filterTreble.connect(reverbNode);
+  reverbNode.connect(wetGainNode);
+  
+  // Recombine into Compressor -> Analyser -> Destination
+  dryGainNode.connect(masterCompressor);
+  wetGainNode.connect(masterCompressor);
+  masterCompressor.connect(analyserNode);
+  analyserNode.connect(audioCtx.destination);
+
+  // Lehra and Tanpura -> fxMasterMix
+  gainLehra = audioCtx.createGain();
+  gainLehra.gain.value = 0.8;
+  gainLehra.connect(fxMasterMix);
+
+  gainTanpura = audioCtx.createGain();
+  gainTanpura.gain.value = 0.5;
+  gainTanpura.connect(fxMasterMix);
+
+  // Metronome chain bypasses FX
+  gainMetronome = audioCtx.createGain();
+  gainMetronome.gain.value = 0.6;
+  gainMetronome.connect(audioCtx.destination);
+
+  if (!metronomeBuffer) {
+    fetch('/assets/Metronome.aac').then(r => r.arrayBuffer()).then(b => audioCtx.decodeAudioData(b)).then(d => metronomeBuffer = d).catch(console.error);
+    fetch('/assets/MetronomeUp.aac').then(r => r.arrayBuffer()).then(b => audioCtx.decodeAudioData(b)).then(d => metronomeUpBuffer = d).catch(console.error);
+  }
+}
+
+// ── Visualizer ─────────────────────────────────────────────────────
+function startVisualizer() {
+  if (!analyserNode) return;
+  const data = new Uint8Array(analyserNode.frequencyBinCount);
+  const mandala = document.querySelector('.np-mandala');
+  
+  function loop() {
+    if (!state.isPlaying) {
+      if (mandala) mandala.style.transform = 'scale(1)';
+      return;
+    }
+    analyserNode.getByteFrequencyData(data);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) sum += data[i];
+    const avg = sum / data.length;
+    
+    if (mandala) {
+      const scale = 1 + (avg / 255) * 0.18; 
+      mandala.style.transform = `scale(${scale})`;
+    }
+    requestAnimationFrame(loop);
+  }
+  loop();
+}
+
+// ── Wake Lock ──────────────────────────────────────────────────────
+let wakeLock = null;
+
+async function requestWakeLock() {
+  if (!state.wakeLockEnabled) return;
+  if ('wakeLock' in navigator) {
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+    } catch (err) {
+      console.error('Wake Lock error:', err);
+    }
+  }
+}
+
+function releaseWakeLock() {
+  if (wakeLock !== null) {
+    wakeLock.release().catch(() => {});
+    wakeLock = null;
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (wakeLock !== null && document.visibilityState === 'visible' && state.isPlaying) {
+    requestWakeLock();
+  }
+});
+
+// ── Metronome ─────────────────────────────────────────────────────
+function scheduleMetronome(time, beatIndex) {
+  if (!state.metronomeEnabled) return;
+  
+  if (state.metronomeSound === 'classic') {
+    if (!metronomeBuffer || !metronomeUpBuffer) return;
+    const src = audioCtx.createBufferSource();
+    src.buffer = (beatIndex === 0) ? metronomeUpBuffer : metronomeBuffer;
+    src.connect(gainMetronome);
+    src.start(time);
+  } else if (state.metronomeSound === 'beep') {
+    const osc = audioCtx.createOscillator();
+    const env = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = (beatIndex === 0) ? 880 : 440;
+    env.gain.setValueAtTime(0, time);
+    env.gain.linearRampToValueAtTime(1, time + 0.01);
+    env.gain.exponentialRampToValueAtTime(0.001, time + 0.1);
+    osc.connect(env);
+    env.connect(gainMetronome);
+    osc.start(time);
+    osc.stop(time + 0.1);
+  } else if (state.metronomeSound === 'woodblock') {
+    const osc = audioCtx.createOscillator();
+    const env = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = (beatIndex === 0) ? 1000 : 800;
+    env.gain.setValueAtTime(0, time);
+    env.gain.linearRampToValueAtTime(1, time + 0.005);
+    env.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+    osc.connect(env);
+    env.connect(gainMetronome);
+    osc.start(time);
+    osc.stop(time + 0.05);
+  }
+}
+
+// ── Volume Sliders ───────────────────────────────────────────────
+function initVolumeSliders() {
+  const lv = $('lehraVol');
+  const tv = $('tanpuraVol');
+
+  lv.addEventListener('input', e => {
+    const v = +e.target.value;
+    if (gainLehra) gainLehra.gain.setTargetAtTime(v / 100, audioCtx.currentTime, 0.02);
+    $('lehraVolVal').textContent = v + '%';
+    lv.style.setProperty('--val', v + '%');
+  });
+  lv.style.setProperty('--val', '80%');
+
+  tv.addEventListener('input', e => {
+    const v = +e.target.value;
+    if (gainTanpura) gainTanpura.gain.setTargetAtTime(v / 100, audioCtx.currentTime, 0.02);
+    $('tanpuraVolVal').textContent = v + '%';
+    tv.style.setProperty('--val', v + '%');
+  });
+  tv.style.setProperty('--val', '50%');
+
+  const mv = $('metronomeVol');
+  mv.addEventListener('input', e => {
+    const v = +e.target.value;
+    if (gainMetronome) gainMetronome.gain.setTargetAtTime(v / 100, audioCtx.currentTime, 0.02);
+    $('metronomeVolVal').textContent = v + '%';
+    mv.style.setProperty('--val', v + '%');
+  });
+  mv.style.setProperty('--val', '60%');
+
+  // Allow pitch-shifting for Tanpura
+  tanpuraEl.preservesPitch = false;
+  tanpuraEl.mozPreservesPitch = false;
+  tanpuraEl.webkitPreservesPitch = false;
+}
+
+// ── Riyaz Tracker ──────────────────────────────────────────────────
+function saveRiyazTime(seconds) {
+  if (seconds <= 0) return;
+  const dateStr = new Date().toISOString().split('T')[0];
+  const key = `lehra_riyaz_${dateStr}`;
+  let current = parseInt(localStorage.getItem(key) || '0', 10);
+  localStorage.setItem(key, current + seconds);
+}
+
+function processRiyazSession() {
+  if (state.riyazStart > 0) {
+    const duration = Math.round((Date.now() - state.riyazStart) / 1000);
+    saveRiyazTime(duration);
+    state.riyazStart = 0;
+  }
+}
+
+function renderStats() {
+  const chart = $('statsChart');
+  if (!chart) return;
+  chart.innerHTML = '';
+  let totalToday = 0;
+  
+  const bars = [];
+  for (let i=6; i>=0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const ds = d.toISOString().split('T')[0];
+    const secs = parseInt(localStorage.getItem(`lehra_riyaz_${ds}`) || '0', 10);
+    bars.push({ date: d.toLocaleDateString('en-US', {weekday:'short'}), secs, isToday: i===0 });
+    if (i===0) totalToday = secs;
+  }
+  
+  const maxSecs = Math.max(...bars.map(b => b.secs), 60); 
+  
+  bars.forEach(b => {
+    const heightPct = (b.secs / maxSecs) * 100;
+    chart.innerHTML += `
+      <div class="stat-bar-container">
+        <div class="stat-bar" style="height: ${Math.max(2, heightPct)}%; opacity: ${b.isToday ? '1':'0.7'};"></div>
+        <div class="stat-label">${b.date}</div>
+      </div>
+    `;
+  });
+  
+  const minToday = Math.round(totalToday / 60);
+  $('statsTotalToday').textContent = minToday + (minToday === 1 ? ' min' : ' mins');
+}
+
+// ── Pitch Select & Fine Tune ───────────────────────────────────────
+async function updateTanpuraPitch() {
+  if (!audioCtx) return; // Will load when play starts
+  if (tanpuraBufferHz === state.pitchHz) return;
+  const url = `/api/tanpura?hz=${state.pitchHz.toFixed(6)}`;
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(res.statusText);
+    const arrayBuf = await res.arrayBuffer();
+    tanpuraBuffer = await audioCtx.decodeAudioData(arrayBuf);
+    tanpuraBufferHz = state.pitchHz;
+    if (state.isPlaying) {
+      playTanpuraSource();
+    }
+  } catch (err) {
+    console.error('Tanpura load error:', err);
+  }
+}
+
+function playTanpuraSource() {
+  if (tanpuraSource) {
+    try { tanpuraSource.stop(0); } catch (_) { }
+    try { tanpuraSource.disconnect(); } catch (_) { }
+    tanpuraSource = null;
+  }
+  if (!tanpuraBuffer || !state.isPlaying) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = tanpuraBuffer;
+  src.loop = true;
+  src.connect(gainTanpura);
+  src.start(0);
+  tanpuraSource = src;
+}
+
+$('pitchSelect').addEventListener('change', async () => {
+  const newHz = parseFloat($('pitchSelect').value);
+  if (newHz === state.pitchHz) return;
+  state.pitchHz = newHz;
+  $('fineTuneHz').value = newHz.toFixed(2); // sync fine tune input
+
+  const sel = $('pitchSelect');
+  const label = sel.options[sel.selectedIndex].text.replace(' (Original)', '').replace('(Original)', '');
+  $('tagPitch').textContent = label;
+  $('tagPitch').classList.toggle('active', true);
+
+  updateTanpuraPitch();
+
+  if (state.isPlaying && state.raag) {
+    await reloadAudio();
+  }
+});
+
+let fineTuneDebounce = null;
+$('fineTuneHz').addEventListener('input', (e) => {
+  let val = parseFloat(e.target.value);
+  if (isNaN(val)) return;
+
+  // Bound to reasonable Hz range (e.g., 60Hz to 300Hz)
+  if (val < 60) val = 60;
+  if (val > 300) val = 300;
+
+  state.pitchHz = val;
+  $('tagPitch').textContent = 'Custom ' + val.toFixed(1) + 'Hz';
+  $('tagPitch').classList.toggle('active', true);
+
+  updateTanpuraPitch();
+
+  // Debounce the audio reload so it doesn't spam the server
+  clearTimeout(fineTuneDebounce);
+  fineTuneDebounce = setTimeout(async () => {
+    if (state.isPlaying && state.raag) {
+      await reloadAudio();
+    }
+  }, 600);
+});
+
+// ── Audio URL ────────────────────────────────────────────────────
+// NOTE on TuningCoeff (matches Android LehraApp / LehraAudioEngineWrapper):
+// Each instrument's recordings were made at (146.83 × tuningCoeff) Hz, not
+// plain 146.83 Hz.  The Android C++ engine compensates via SetLehraParams.
+// We replicate that by sending hz = pitchHz / tuningCoeff to the server so
+// it shifts from the recording's actual base pitch to the desired scale.
+// Tanpura (tanpura_06_01.wav) is always at D=146.83 Hz — no correction needed there.
+function getEffectiveLehraHz() {
+  const tuningCoeff = CATALOGUE[state.instrument]?.tuningCoeff ?? 1.0;
+  return state.pitchHz / tuningCoeff;
+}
+
+function getAudioUrl() {
+  if (!state.instrument || !state.taal || !state.raag || !state.taalData) return null;
+  const raagData = CATALOGUE[state.instrument]?.taals[state.taal]?.raags[state.raag];
+  if (!raagData?.file) return null;
+
+  const segments = computeSegments(state.taalData);
+  const seg = closestSegment(state.bpm, segments);
+  const stretch = state.bpm / seg.presetBpm;
+
+  // effectiveHz corrects for each instrument's recording tuning offset.
+  // e.g. Sarangi: tuningCoeff=1.05945651 → at D (146.83 Hz) the server shifts
+  // to 146.83/1.05945651 ≈ 138.59 Hz target, which brings the Sarangi
+  // recording (naturally at ~155.56 Hz) back into unison with the tanpura.
+  const effectiveHz = getEffectiveLehraHz();
+
+  return `/api/audio?file=${encodeURIComponent(raagData.file)}&hz=${effectiveHz.toFixed(6)}&start=${seg.start}&end=${seg.end}&stretch=${stretch}`;
+}
+
+// ── Compute segment layout from taalData ─────────────────────────
+// Each preset tempo maps to a segment in the audio file.
+// Duration of each segment = (beats × 60 / presetBpm) seconds.
+function computeSegments(taalData) {
+  const segments = [];
+  let t = 0;
+  for (const presetBpm of taalData.tempos) {
+    const dur = (taalData.beats * 60) / presetBpm;
+    segments.push({ presetBpm, start: t, duration: dur, end: t + dur });
+    t += dur;
+  }
+  return segments;
+}
+
+function closestSegment(bpm, segments) {
+  return segments.reduce((best, seg) =>
+    Math.abs(seg.presetBpm - bpm) < Math.abs(best.presetBpm - bpm) ? seg : best
+  );
+}
+
+// ── Fetch + Decode audio ──────────────────────────────────────────
+async function fetchAndDecode(url) {
+  setStatus('Processing audio on server…', 'loading');
+  setBadge('Processing…', true);
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+
+  setStatus('Decoding audio…', 'loading');
+  const arrayBuf = await res.arrayBuffer();
+  const decoded = await audioCtx.decodeAudioData(arrayBuf);
+  return decoded;
+}
+
+// ── Create and start source node ─────────────────────────────────
+function stopLehraSource() {
+  if (lehraSource) {
+    try { lehraSource.stop(0); } catch (_) { }
+    try { lehraSource.disconnect(); } catch (_) { }
+    lehraSource = null;
+  }
+}
+
+function createSource(buffer) {
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  src.loop = state.isLooping;
+
+  // The buffer from the server is EXACTLY the loop, perfectly stretched!
+  // So we just loop the whole thing, and play at native speed (1.0).
+  // No chipmunking!
+  src.playbackRate.value = 1.0;
+  src.connect(gainLehra);
+  src.start(0);
+
+  src.onended = () => {
+    if (!state.isLooping && state.isPlaying) {
+      state.isPlaying = false;
+      onStopped();
+    }
+  };
+
+  lehraSource = src;
+}
+
+async function loadAndPlay() {
+  if (!state.raag || !state.taalData) {
+    setStatus('Select instrument → taal → raag first', '');
+    return;
+  }
+
+  await ensureAudioCtx();
+  const url = getAudioUrl();
+  if (!url) { setStatus('Could not resolve audio path', ''); return; }
+
+  stopLehraSource();
+  isLoading = true;
+
+  try {
+    if (lehraBuffer && lehraBufferUrl === url) {
+      // Cache hit — play immediately
+      createSource(lehraBuffer);
+    } else {
+      lehraBuffer = null;
+      lehraBufferUrl = null;
+      lehraBuffer = await fetchAndDecode(url);
+      lehraBufferUrl = url;
+      loadedBpm = state.bpm;
+      createSource(lehraBuffer);
+    }
+
+    state.isPlaying = true;
+    showPause();
+    startWaveform();
+    startBeatFlash();
+    startMatraCounter();
+    $('nowPlayingCard').classList.add('playing');
+    await updateTanpuraPitch(); // Ensure tanpura buffer is loaded
+    playTanpuraSource();
+    requestWakeLock();
+    state.riyazStart = Date.now();
+    setStatus(`Playing: ${state.raag} · ${state.instrument} · ${state.bpm} BPM`, 'playing');
+    setBadge('Playing', false);
+    $('infoDot').className = 'info-dot playing';
+    updateBeatTiming();
+    startVisualizer();
+    showMatraRow(true);
+
+  } catch (err) {
+    console.error('Audio load error:', err);
+    setStatus('Audio error: ' + err.message, '');
+    setBadge('Error', false);
+    state.isPlaying = false;
+    showPlay();
+  }
+  isLoading = false;
+}
+
+async function reloadAudio() {
+  if (!state.isPlaying) return;
+  const oldPos = lehraSource ? (audioCtx.currentTime) : 0;
+  stopLehraSource();
+  lehraBuffer = null;
+  lehraBufferUrl = null;
+  await loadAndPlay();
+}
+
+function pausePlayback() {
+  if (!state.isPlaying) return;
+  state.isPlaying = false;
+  processRiyazSession();
+  if (lehraSource) { lehraSource.stop(); lehraSource.disconnect(); lehraSource = null; }
+  if (tanpuraSource) { tanpuraSource.stop(); tanpuraSource.disconnect(); tanpuraSource = null; }
+  showPlay();
+  stopBeatFlash();
+  stopMatraCounter();
+  $('nowPlayingCard').classList.remove('playing');
+  releaseWakeLock();
+  $('infoDot').className = 'info-dot';
+  setStatus('Paused', '');
+}
+
+function stopPlayback() {
+  state.isPlaying = false;
+  processRiyazSession();
+  if (lehraSource) { lehraSource.stop(); lehraSource.disconnect(); lehraSource = null; }
+  if (tanpuraSource) { tanpuraSource.stop(); tanpuraSource.disconnect(); tanpuraSource = null; }
+  state.beatIndex = 0;
+  showPlay();
+  stopBeatFlash();
+  stopMatraCounter();
+  clearWaveform();
+  $('nowPlayingCard').classList.remove('playing');
+  releaseWakeLock();
+  $('infoDot').className = 'info-dot';
+  setStatus('Stopped', '');
+  setBadge('Web Player', false);
+  updateMatraDisplay(0, state.taalData?.beats || 0);
+}
+
+function onStopped() {
+  stopBeatFlash();
+  stopMatraCounter();
+  clearWaveform();
+  showPlay();
+  $('nowPlayingCard').classList.remove('playing');
+  $('infoDot').className = 'info-dot';
+  setStatus('Ready', '');
+}
+
+async function togglePlay() {
+  if (state.isPlaying) {
+    pausePlayback();
+  } else {
+    await loadAndPlay();
+  }
+}
+
+// ── Apply tempo change ────────────────────────────────────────────
+function applyTempoChange() {
+  if (!state.isPlaying || !lehraBuffer || !state.taalData || !loadedBpm) return;
+
+  // We DO NOT use playbackRate here because it changes pitch (the chipmunk effect).
+  // The user explicitly requested to remove the temporary pitch spike.
+  // Instead, we just wait for the server to provide the perfectly stretched loop.
+
+  // 2. Debounce fetch for PERFECT loop (time-stretched on server, pitch preserved)
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(async () => {
+    if (state.bpm === loadedBpm || !state.isPlaying) return;
+
+    const url = getAudioUrl();
+    if (url === lehraBufferUrl) return;
+
+    try {
+      const oldSource = lehraSource;
+      const buffer = await fetchAndDecode(url); // fetches in background!
+
+      // Hot-swap
+      lehraBuffer = buffer;
+      lehraBufferUrl = url;
+      loadedBpm = state.bpm;
+
+      createSource(buffer);
+      if (oldSource) {
+        try { oldSource.stop(0); oldSource.disconnect(); } catch (_) { }
+      }
+
+      // Sync beats gracefully without fully resetting the UI flash
+      updateBeatTiming();
+      setStatus(`Playing: ${state.raag} · ${state.instrument} · ${state.bpm} BPM`, 'playing');
+    } catch (err) {
+      console.error("Perfect loop swap failed", err);
+    }
+  }, 400); // Wait 400ms after user stops dragging
+}
+
+// ── Instrument Rendering ─────────────────────────────────────────
+function renderInstruments() {
+  const list = $('instrumentList');
+  list.innerHTML = '';
+  Object.entries(CATALOGUE).forEach(([name, data]) => {
+    const btn = document.createElement('button');
+    btn.className = 'selector-btn';
+    const tc = Object.keys(data.taals).length;
+    btn.innerHTML = `<span>${name}</span><span class="btn-badge">${tc} taal${tc !== 1 ? 's' : ''}</span>`;
+    btn.addEventListener('click', () => selectInstrument(name, btn));
+    list.appendChild(btn);
+  });
+}
+
+function selectInstrument(name, btn) {
+  state.instrument = name;
+  state.taal = null; state.taalData = null; state.raag = null;
+  document.querySelectorAll('#instrumentList .selector-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderTaals();
+  $('raagList').innerHTML = '<p class="empty-hint">← Select a taal first</p>';
+  clearTempoPanel();
+  updateNowPlaying();
+  renderBeatDots(0);
+  updateMatraDisplay(0, 0);
+  showMatraRow(false);
+}
+
+// ── Taal Rendering ────────────────────────────────────────────────
+function renderTaals() {
+  const list = $('taalList');
+  list.innerHTML = '';
+  Object.entries(CATALOGUE[state.instrument].taals).forEach(([name, data]) => {
+    const btn = document.createElement('button');
+    btn.className = 'selector-btn';
+    btn.innerHTML = `<span>${name}</span><span class="btn-badge">${data.beats} beats</span>`;
+    btn.addEventListener('click', () => selectTaal(name, data, btn));
+    list.appendChild(btn);
+  });
+}
+
+function selectTaal(name, data, btn) {
+  state.taal = name; state.taalData = data; state.raag = null;
+  document.querySelectorAll('#taalList .selector-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderRaags(data.raags);
+  clearTempoPanel();
+  renderBeatDots(data.beats);
+  updateNowPlaying();
+  updateMatraDisplay(0, data.beats);
+  $('matraTotal').textContent = data.beats;
+}
+
+// ── Raag Rendering ────────────────────────────────────────────────
+function renderRaags(raags) {
+  const list = $('raagList');
+  list.innerHTML = '';
+  Object.keys(raags).forEach(name => {
+    const btn = document.createElement('button');
+    btn.className = 'selector-btn';
+    btn.textContent = name;
+    btn.addEventListener('click', () => selectRaag(name, btn));
+    list.appendChild(btn);
+  });
+}
+
+function selectRaag(name, btn) {
+  state.raag = name;
+  document.querySelectorAll('#raagList .selector-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  state.bpm = state.taalData.tempos[0];
+  buildTempoPanel(state.taalData);
+  updateNowPlaying();
+  if (state.isPlaying) {
+    lehraBuffer = null; lehraBufferUrl = null;
+    loadAndPlay();
+  }
+}
+
+// ── Tempo Panel ───────────────────────────────────────────────────
+function clearTempoPanel() {
+  $('tempoPills').innerHTML = '<p class="empty-hint">Select instrument → taal → raag</p>';
+  $('tempoSliderWrap').style.display = 'none';
+  $('tempoValue').textContent = '—';
+  $('tempoRangeLabel').textContent = '';
+  $('sliderTicks').innerHTML = '';
+}
+
+function buildTempoPanel(taalData) {
+  const { tempos, minTempo, maxTempo } = taalData;
+  $('tempoRangeLabel').textContent = `${minTempo}–${maxTempo} BPM`;
+
+  const pills = $('tempoPills');
+  pills.innerHTML = '';
+  tempos.forEach(t => {
+    const pill = document.createElement('button');
+    pill.className = 'tempo-preset-pill' + (t === state.bpm ? ' active' : '');
+    pill.textContent = t;
+    pill.dataset.bpm = t;
+    pill.addEventListener('click', () => {
+      setBpm(t);
+      syncSlider();
+      applyTempoChange();
+    });
+    pills.appendChild(pill);
+  });
+
+  $('tempoSliderWrap').style.display = '';
+  buildSliderTicks(tempos, minTempo, maxTempo);
+  syncSlider();
+  $('tempoValue').textContent = state.bpm;
+}
+
+function buildSliderTicks(tempos, minTempo, maxTempo) {
+  const wrap = $('sliderTicks');
+  wrap.innerHTML = '';
+  wrap.style.position = 'relative'; wrap.style.height = '28px';
+  const range = maxTempo - minTempo;
+  tempos.forEach(t => {
+    const tick = document.createElement('div');
+    tick.className = 'slider-tick';
+    tick.dataset.bpm = t;
+    tick.style.position = 'absolute';
+    tick.style.left = ((t - minTempo) / range * 100) + '%';
+    tick.style.transform = 'translateX(-50%)';
+    tick.innerHTML = `<div class="slider-tick-line"></div><div class="slider-tick-label">${t}</div>`;
+    tick.addEventListener('click', () => { setBpm(t); syncSlider(); applyTempoChange(); });
+    wrap.appendChild(tick);
+  });
+}
+
+function setBpm(bpm) {
+  if (!state.taalData) return;
+  const { minTempo, maxTempo } = state.taalData;
+  state.bpm = Math.max(minTempo, Math.min(maxTempo, Math.round(bpm)));
+}
+
+function bpmToProgress(bpm) {
+  const { minTempo, maxTempo } = state.taalData;
+  return (bpm - minTempo) / (maxTempo - minTempo) * 210;
+}
+
+function progressToBpm(progress) {
+  const { minTempo, maxTempo } = state.taalData;
+  return Math.round(minTempo + (progress / 210) * (maxTempo - minTempo));
+}
+
+function syncSlider() {
+  if (!state.taalData) return;
+  const progress = bpmToProgress(state.bpm);
+  const slider = $('tempoSlider');
+  slider.value = progress;
+  slider.style.setProperty('--slider-pct', (progress / 210 * 100).toFixed(1) + '%');
+  $('tempoValue').textContent = state.bpm;
+
+  const nearest = state.taalData.tempos.reduce((a, b) =>
+    Math.abs(b - state.bpm) < Math.abs(a - state.bpm) ? b : a
+  );
+  document.querySelectorAll('.tempo-preset-pill').forEach(p =>
+    p.classList.toggle('active', +p.dataset.bpm === nearest));
+  document.querySelectorAll('.slider-tick').forEach(t =>
+    t.classList.toggle('active', +t.dataset.bpm === nearest));
+  updateNowPlaying();
+}
+
+// ── Tempo Slider Events ───────────────────────────────────────────
+$('tempoSlider').addEventListener('input', e => {
+  if (!state.taalData) return;
+  setBpm(progressToBpm(+e.target.value));
+  e.target.style.setProperty('--slider-pct', (+e.target.value / 210 * 100).toFixed(1) + '%');
+  $('tempoValue').textContent = state.bpm;
+  syncSlider();
+  applyTempoChange();
+});
+
+$('bpmMinus').addEventListener('click', () => { if (state.taalData) { setBpm(state.bpm - 1); syncSlider(); applyTempoChange(); } });
+$('bpmPlus').addEventListener('click', () => { if (state.taalData) { setBpm(state.bpm + 1); syncSlider(); applyTempoChange(); } });
+
+// Long-press ±
+function addLongPress(id, fn) {
+  let iv = null;
+  const el = $(id);
+  const go = () => { fn(); iv = setInterval(fn, 80); };
+  const stop = () => { clearInterval(iv); iv = null; };
+  el.addEventListener('mousedown', go);
+  el.addEventListener('mouseup', stop);
+  el.addEventListener('mouseleave', stop);
+  el.addEventListener('touchstart', e => { e.preventDefault(); go(); }, { passive: false });
+  el.addEventListener('touchend', stop);
+}
+addLongPress('bpmMinus', () => { if (state.taalData) { setBpm(state.bpm - 1); syncSlider(); applyTempoChange(); } });
+addLongPress('bpmPlus', () => { if (state.taalData) { setBpm(state.bpm + 1); syncSlider(); applyTempoChange(); } });
+
+// ── Tap Tempo ──────────────────────────────────────────────────────
+$('tapTempoBtn').addEventListener('click', () => {
+  if (!state.taalData) return;
+  const now = Date.now();
+  const last = state.tapTimes[state.tapTimes.length - 1];
+  if (!last || now - last > 2000) {
+    state.tapTimes = [now];
+    setStatus('Tap again to set tempo…', '');
+    return;
+  }
+  if (now - last < 100) return;
+  state.tapTimes.push(now);
+  if (state.tapTimes.length > 6) state.tapTimes.shift();
+  if (state.tapTimes.length >= 2) {
+    let total = 0;
+    for (let i = 1; i < state.tapTimes.length; i++) total += state.tapTimes[i] - state.tapTimes[i - 1];
+    const bpm = Math.round(60000 / (total / (state.tapTimes.length - 1)));
+    setBpm(bpm); syncSlider(); applyTempoChange();
+    setStatus(`Tap tempo: ${state.bpm} BPM`, '');
+  }
+});
+
+// ── Beat Flash ────────────────────────────────────────────────────
+function renderBeatDots(beats) {
+  const c = $('beatDots');
+  c.innerHTML = '';
+  state.beatIndex = 0;
+  for (let i = 0; i < beats; i++) {
+    const d = document.createElement('div');
+    d.className = 'beat-dot' + (i === 0 ? ' sam' : '');
+    d.id = `bd-${i}`;
+    c.appendChild(d);
+  }
+}
+
+function startBeatFlash() {
+  stopBeatFlash();
+  if (!state.taalData) return;
+  const beats = state.taalData.beats;
+  state.beatIndex = 0;
+  
+  if (audioCtx) nextNoteTime = audioCtx.currentTime;
+  
+  flashBeat();
+  if (audioCtx) scheduleMetronome(nextNoteTime, state.beatIndex);
+  
+  const beatIntervalMs = 60000 / state.bpm;
+  state.beatInterval = setInterval(() => {
+    state.beatIndex = (state.beatIndex + 1) % beats;
+    flashBeat();
+    
+    if (audioCtx) {
+      nextNoteTime += 60 / state.bpm;
+      scheduleMetronome(nextNoteTime, state.beatIndex);
+    }
+  }, beatIntervalMs);
+}
+
+function flashBeat() {
+  document.querySelectorAll('.beat-dot').forEach(d => d.classList.remove('active'));
+  const d = $(`bd-${state.beatIndex}`);
+  if (d) d.classList.add('active');
+}
+
+function stopBeatFlash() {
+  clearInterval(state.beatInterval);
+  state.beatInterval = null;
+  document.querySelectorAll('.beat-dot').forEach(d => d.classList.remove('active'));
+}
+
+function updateBeatTiming() {
+  if (state.isPlaying) { stopBeatFlash(); startBeatFlash(); stopMatraCounter(); startMatraCounter(); }
+}
+
+// ── Matra Counter (from UIMain.java GetBeatCounter display) ───────
+function startMatraCounter() {
+  stopMatraCounter();
+  if (!state.taalData) return;
+  const beats = state.taalData.beats;
+  state.matraCount = 1;
+  updateMatraDisplay(1, beats);
+  state.matraInterval = setInterval(() => {
+    state.matraCount = (state.matraCount % beats) + 1;
+    updateMatraDisplay(state.matraCount, beats);
+  }, 60000 / state.bpm);
+}
+
+function stopMatraCounter() {
+  clearInterval(state.matraInterval);
+  state.matraInterval = null;
+}
+
+function updateMatraDisplay(matra, total) {
+  const el = $('matraCounter');
+  if (!el) return;
+  el.textContent = matra > 0 ? matra : '—';
+  el.classList.toggle('sam', matra === 1 && total > 0);
+}
+
+function showMatraRow(show) {
+  const row = $('matraRow');
+  if (row) row.style.display = show ? '' : 'none';
+}
+
+// ── Waveform ──────────────────────────────────────────────────────
+function startWaveform() {
+  if (!analyserNode || !canvas) return;
+  const buf = new Uint8Array(analyserNode.frequencyBinCount);
+
+  function draw() {
+    state.waveFrame = requestAnimationFrame(draw);
+    analyserNode.getByteTimeDomainData(buf);
+    const W = canvas.offsetWidth, H = canvas.offsetHeight;
+    ctx2d.clearRect(0, 0, W, H);
+    ctx2d.lineWidth = 2;
+    const g = ctx2d.createLinearGradient(0, 0, W, 0);
+    g.addColorStop(0, '#f5a623');
+    g.addColorStop(1, '#e8572a');
+    ctx2d.strokeStyle = g;
+    ctx2d.beginPath();
+    const sl = W / buf.length;
+    for (let i = 0; i < buf.length; i++) {
+      const x = i * sl;
+      const y = (buf[i] / 128) * H / 2;
+      i === 0 ? ctx2d.moveTo(x, y) : ctx2d.lineTo(x, y);
+    }
+    ctx2d.stroke();
+  }
+  draw();
+}
+
+function clearWaveform() {
+  if (state.waveFrame) { cancelAnimationFrame(state.waveFrame); state.waveFrame = null; }
+  if (ctx2d && canvas) ctx2d.clearRect(0, 0, canvas.offsetWidth, canvas.offsetHeight);
+}
+
+// ── Now Playing ───────────────────────────────────────────────────
+function updateNowPlaying() {
+  $('npRaag').textContent = state.raag || 'Select a Raag';
+  $('npDetails').textContent = state.instrument && state.taal
+    ? `${state.instrument} · ${state.taal}`
+    : 'Choose instrument, taal & tempo to begin';
+
+  const tags = [
+    [$('tagInstrument'), state.instrument],
+    [$('tagTaal'), state.taal],
+    [$('tagBeats'), state.taalData ? `${state.taalData.beats} beats` : null],
+    [$('tagTempo'), state.bpm && state.raag ? `${state.bpm} BPM` : null],
+  ];
+  tags.forEach(([el, val]) => {
+    if (el) { el.textContent = val || '—'; el.classList.toggle('active', !!val); }
+  });
+}
+
+// ── Transport ──────────────────────────────────────────────────────
+$('playBtn').addEventListener('click', togglePlay);
+$('stopBtn').addEventListener('click', stopPlayback);
+$('loopBtn').addEventListener('click', () => {
+  state.isLooping = !state.isLooping;
+  if (lehraSource) lehraSource.loop = state.isLooping;
+  $('loopBtn').classList.toggle('active', state.isLooping);
+});
+
+// ── Keyboard Shortcuts ─────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  const tag = e.target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  if (e.code === 'Space') {
+    e.preventDefault();
+    togglePlay();
+  } else if (e.code === 'ArrowUp') {
+    e.preventDefault();
+    if (state.taalData) {
+      setBpm(state.bpm + 1);
+      syncSlider();
+      applyTempoChange();
+    }
+  } else if (e.code === 'ArrowDown') {
+    e.preventDefault();
+    if (state.taalData) {
+      setBpm(state.bpm - 1);
+      syncSlider();
+      applyTempoChange();
+    }
+  }
+});
+
+// ── UI Helpers ────────────────────────────────────────────────────
+function showPlay() { $('playIcon').style.display = ''; $('pauseIcon').style.display = 'none'; }
+function showPause() { $('playIcon').style.display = 'none'; $('pauseIcon').style.display = ''; }
+
+function setStatus(msg, type) {
+  $('statusText').textContent = msg;
+  const dot = $('infoDot');
+  dot.className = 'info-dot' + (type ? ' ' + type : '');
+}
+
+function setBadge(text, loading) {
+  const b = $('loadingBadge');
+  b.textContent = text;
+  b.classList.toggle('loading', loading);
+}
+
+// ── Init ──────────────────────────────────────────────────────────
+function init() {
+  renderInstruments();
+  initVolumeSliders();
+  $('loopBtn').classList.add('active');
+  showPlay();
+  showMatraRow(false);
+  setStatus('Ready — select a raag to begin', '');
+
+  // Set initial pitch tag
+  const sel = $('pitchSelect');
+  $('tagPitch').textContent = sel.options[sel.selectedIndex].text.replace(' (Original)', '').replace('(Original)', '');
+  $('tagPitch').classList.add('active');
+
+  // Options listeners
+  $('metronomeToggle').addEventListener('change', e => {
+    state.metronomeEnabled = e.target.checked;
+  });
+  $('metronomeSoundSelect').addEventListener('change', e => {
+    state.metronomeSound = e.target.value;
+  });
+  $('wakeLockToggle').addEventListener('change', e => {
+    state.wakeLockEnabled = e.target.checked;
+    if (!state.wakeLockEnabled) releaseWakeLock();
+    else if (state.isPlaying) requestWakeLock();
+  });
+
+  // Studio FX Listeners
+  const fxBass = $('fxBass');
+  const fxTreble = $('fxTreble');
+  const fxReverb = $('fxReverb');
+  
+  if (fxBass) {
+    fxBass.addEventListener('input', e => {
+      const v = +e.target.value;
+      if (filterBass) filterBass.gain.setTargetAtTime(v, audioCtx.currentTime, 0.02);
+      $('fxBassVal').textContent = v + 'dB';
+      fxBass.style.setProperty('--val', ((v + 12) / 24 * 100) + '%');
+    });
+    fxBass.style.setProperty('--val', '50%');
+  }
+
+  if (fxTreble) {
+    fxTreble.addEventListener('input', e => {
+      const v = +e.target.value;
+      if (filterTreble) filterTreble.gain.setTargetAtTime(v, audioCtx.currentTime, 0.02);
+      $('fxTrebleVal').textContent = v + 'dB';
+      fxTreble.style.setProperty('--val', ((v + 12) / 24 * 100) + '%');
+    });
+    fxTreble.style.setProperty('--val', '50%');
+  }
+
+  if (fxReverb) {
+    fxReverb.addEventListener('input', e => {
+      const v = +e.target.value;
+      const wet = v / 100;
+      const dry = 1 - (wet * 0.5); // lower dry slightly as wet increases
+      if (wetGainNode) wetGainNode.gain.setTargetAtTime(wet, audioCtx.currentTime, 0.02);
+      if (dryGainNode) dryGainNode.gain.setTargetAtTime(dry, audioCtx.currentTime, 0.02);
+      $('fxReverbVal').textContent = v + '%';
+      fxReverb.style.setProperty('--val', v + '%');
+    });
+    fxReverb.style.setProperty('--val', '0%');
+  }
+
+  // Modals
+  $('fxBtn')?.addEventListener('click', () => {
+    $('fxModal').classList.add('active');
+  });
+  $('fxClose')?.addEventListener('click', () => {
+    $('fxModal').classList.remove('active');
+  });
+  
+  $('statsBtn')?.addEventListener('click', () => {
+    renderStats();
+    $('statsModal').classList.add('active');
+  });
+  $('statsClose')?.addEventListener('click', () => {
+    $('statsModal').classList.remove('active');
+  });
+
+  // Fullscreen
+  $('fullscreenBtn')?.addEventListener('click', () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(err => {
+        console.error(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`);
+      });
+    } else {
+      document.exitFullscreen();
+    }
+  });
+
+  document.addEventListener('fullscreenchange', () => {
+    if (document.fullscreenElement) {
+      document.body.classList.add('fullscreen-mode');
+    } else {
+      document.body.classList.remove('fullscreen-mode');
+    }
+  });
+
+  if (canvas) {
+    const ro = new ResizeObserver(() => {
+      canvas.width = canvas.offsetWidth;
+      canvas.height = canvas.offsetHeight;
+    });
+    ro.observe(canvas);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', init);
