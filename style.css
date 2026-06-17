@@ -1096,7 +1096,14 @@ body.fullscreen-mode .np-waveform {
   
   .volume-row { gap: 16px; }
   .options-row { gap: 16px; flex-wrap: wrap; }
+  .options-row > div { flex-wrap: wrap; gap: 8px; }
   .playback-controls { padding: 18px; }
+
+  /* Modals on Mobile */
+  .modal-content { padding: 18px; width: 95%; }
+  .modal-header { margin-bottom: 14px; }
+  .fx-sliders .vol-name { font-size: 0.75rem; width: 45px; }
+  .stats-chart { height: 120px; }
   
   .info-bar { 
     flex-direction: column; 

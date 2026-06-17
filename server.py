@@ -42,10 +42,8 @@ CACHE_DIR.mkdir(exist_ok=True)
 BASE_HZ    = 146.83   # D — the pitch all recordings were made at
 SAMPLE_RATE = 44100
 
-# Ensure FFmpeg is in PATH for librosa/audioread to decode AAC files
-ffmpeg_path = r"C:\Users\Madhu\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.1-full_build\bin"
-if ffmpeg_path not in os.environ.get("PATH", ""):
-    os.environ["PATH"] += os.pathsep + ffmpeg_path
+# (FFmpeg is required in system PATH for librosa/audioread to decode AAC files)
+# In Docker, this is installed via `apt-get install ffmpeg`.
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger(__name__)
@@ -262,6 +260,7 @@ if __name__ == '__main__':
     log.info(f"  Webapp dir : {BASE_DIR}")
     log.info(f"  Assets dir : {ASSETS_DIR}")
     log.info(f"  Cache dir  : {CACHE_DIR}")
-    log.info("  Open: http://localhost:3000")
+    port = int(os.environ.get('PORT', 3000))
+    log.info(f"  Open: http://localhost:{port}")
     log.info("=" * 60)
-    app.run(debug=False, host='0.0.0.0', port=3000, threaded=True)
+    app.run(debug=False, host='0.0.0.0', port=port, threaded=True)
