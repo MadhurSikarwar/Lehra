@@ -25,4 +25,4 @@ COPY . /app/
 EXPOSE 3000
 
 # Run the application with Gunicorn
-CMD gunicorn --bind 0.0.0.0:${PORT:-3000} --workers 2 --threads 4 server:app
+CMD gunicorn --bind 0.0.0.0:${PORT:-3000} --workers 1 --threads 2 server:app

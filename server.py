@@ -125,7 +125,7 @@ def pitch_shift_file(input_path: pathlib.Path, output_path: pathlib.Path, pitch_
             sr=sr,
             n_steps=n_semitones,
             bins_per_octave=12,
-            res_type='kaiser_best'   # highest quality resampling
+            res_type='kaiser_fast'   # lower RAM footprint for 512MB servers
         )
 
     log.info(f"  -> Processing complete, {len(y)/sr:.2f}s of audio")
