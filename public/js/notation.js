@@ -1,6 +1,5 @@
-
 // ============================================================
-// NOTATION STUDIO - CORE ENGINE (PHASE 1)
+// NOTATION STUDIO - CORE ENGINE
 // ============================================================
 
 // 1. Global State
@@ -9,30 +8,201 @@ let notationState = {
   system: 'bhatkhande', // 'bhatkhande' or 'paluskar'
   language: 'en', // 'en' or 'hi'
   taal: '16', // default Teentaal
+  activeCell: { lineIndex: 0, matraIndex: 0 },
   lines: [
     // Array of lines. Each line is an array of matras.
-    // We start with 1 empty line of 16 matras
-    Array.from({length: 16}, (_, i) => ({ matra: i + 1, content: '', modifier: null }))
+    Array.from({length: 16}, (_, i) => ({ matra: i + 1, content: '-', modifier: null }))
   ]
 };
 
-// 2. Taal Configurations
+// History Stack for Undo/Redo
+let historyStack = [];
+let historyIndex = -1;
+
+// 2. Constants & Configurations
 const TAAL_CONFIG = {
   '16': { name: 'Teentaal', matras: 16, vibhags: [4, 4, 4, 4], taliKhali: ['X', '2', '0', '3'] },
   '12': { name: 'Ektaal', matras: 12, vibhags: [2, 2, 2, 2, 2, 2], taliKhali: ['X', '0', '2', '0', '3', '4'] },
   '10': { name: 'Jhaptaal', matras: 10, vibhags: [2, 3, 2, 3], taliKhali: ['X', '2', '0', '3'] },
   '8': { name: 'Keharwa', matras: 8, vibhags: [4, 4], taliKhali: ['X', '0'] },
-  '7': { name: 'Rupak', matras: 7, vibhags: [3, 2, 2], taliKhali: ['0', '1', '2'] }, // Rupak starts with Khali
+  '7': { name: 'Rupak', matras: 7, vibhags: [3, 2, 2], taliKhali: ['0', '1', '2'] },
   '6': { name: 'Dadra', matras: 6, vibhags: [3, 3], taliKhali: ['X', '0'] },
   '14': { name: 'Dhamar', matras: 14, vibhags: [5, 2, 3, 4], taliKhali: ['X', '2', '0', '3'] },
   '14_deep': { name: 'Deepchandi', matras: 14, vibhags: [3, 4, 3, 4], taliKhali: ['X', '2', '0', '3'] }
 };
 
-// 3. Rendering Engine
+const PALETTE_DATA = {
+  tabla: {
+    en: ['Dha', 'Dhin', 'Dhun', 'Tin', 'Ta', 'Na', 'Ge', 'Ke', 'Kat', 'Tit', 'Tirakita', 'Tete', 'Dhage', 'Dhere Dhere', 'Trkt', 'Tun', 'Ti', 'Ra', 'Ki', 'Ta', '-'],
+    hi: ['धा', 'धिन', 'धुन', 'तिन', 'ता', 'ना', 'गे', 'के', 'कत', 'टिट', 'तिरकिट', 'टेटे', 'धागे', 'धेरे धेरे', 'त्रक्ट', 'तुन', 'ती', 'र', 'की', 'टा', '-', 'ऽ']
+  },
+  vocal: {
+    en: ['Sa', 'Re', 'Ga', 'Ma', 'Pa', 'Dha', 'Ni', 'S', 'R', 'G', 'M', 'P', 'D', 'N', '-'],
+    hi: ['सा', 'रे', 'ग', 'म', 'प', 'ध', 'नि', '-', 'ऽ']
+  }
+};
+
+// English/Hindi Translation Maps for Bols and Swaras
+const TRANSLATION_MAP_EN_TO_HI = {
+  // Swaras
+  's': 'सा', 'sa': 'सा',
+  'r': 'रे', 're': 'रे',
+  'g': 'ग', 'ga': 'ग',
+  'm': 'म', 'ma': 'म',
+  'p': 'प', 'pa': 'प',
+  'd': 'ध', 'dha': 'ध',
+  'n': 'नि', 'ni': 'नि',
+  'ṡ': 'सा', 'ṙ': 'रे', 'ġ': 'ग',
+  'ṇ': 'नि',
+  // Tabla Bols
+  'dha': 'धा', 'dhin': 'धिन', 'dhun': 'धुन', 'tin': 'तिन', 'ta': 'ता', 'na': 'ना',
+  'ge': 'गे', 'ke': 'के', 'kat': 'कत', 'tit': 'टिट', 'tirakita': 'तिरकिट', 'tete': 'टेटे',
+  'dhage': 'धागे', 'dhere': 'धेरे', 'trkt': 'त्रक्ट', 'tun': 'तुन', 'ti': 'ती',
+  'ra': 'र', 'ki': 'की',
+  '-': '-', 'ऽ': 'ऽ'
+};
+
+const TRANSLATION_MAP_HI_TO_EN = {
+  // Swaras
+  'सा': 'Sa', 'रे': 'Re', 'ग': 'Ga', 'म': 'Ma', 'प': 'Pa', 'ध': 'Dha', 'नि': 'Ni',
+  // Tabla Bols
+  'धा': 'Dha', 'धिन': 'Dhin', 'धुन': 'Dhun', 'तिन': 'Tin', 'ता': 'Ta', 'ना': 'Na',
+  'गे': 'Ge', 'के': 'Ke', 'कत': 'Kat', 'टिट': 'Tit', 'तिरकिट': 'Tirakita', 'टेटे': 'Tete',
+  'धागे': 'Dhage', 'धेरे': 'Dhere', 'त्रक्ट': 'Trkt', 'तुन': 'Tun', 'ती': 'Ti',
+  'र': 'Ra', 'की': 'Ki', 'टा': 'Ta',
+  '-': '-', 'ऽ': '-'
+};
+
+const TEMPLATES = {
+  tabla: {
+    kaida: {
+      name: 'Kaida (Teentaal)',
+      taal: '16',
+      title: 'Teentaal Kaida - Dha Ti Ta',
+      lines: [
+        ['Dha Ti Ta Dha', 'Ti Ta Dha Dha', 'Ti Ta Dha Ge', 'Na Dha Ti Ta', 'Ta Ti Ta Ta', 'Ti Ta Ta Ta', 'Ti Ta Dha Ge', 'Na Dha Ti Ta', 'Dha Ti Ta Dha', 'Ti Ta Dha Dha', 'Ti Ta Dha Ge', 'Na Dha Ti Ta', 'Dha Ti Ta Dha', 'Ti Ta Dha Ge', 'Na Dha Ti Ta', '-']
+      ]
+    },
+    rela: {
+      name: 'Rela (Teentaal)',
+      taal: '16',
+      title: 'Teentaal Rela - Tirakita',
+      lines: [
+        ['Tirakita Dha Tirakita', 'Dha Dha Tirakita', 'Dha Ge Na Dha', 'Tirakita Dha Ge', 'Tirakita Ta Tirakita', 'Ta Ta Tirakita', 'Dha Ge Na Dha', 'Tirakita Dha Ge', 'Dha Tirakita Dha', 'Dha Tirakita Dha', 'Dha Ge Na Dha', 'Tirakita Dha Ge', 'Dha Tirakita Dha', 'Tirakita Dha Ge', 'Na Dha Ti Ta', '-']
+      ]
+    },
+    tukda: {
+      name: 'Tukda (Teentaal)',
+      taal: '16',
+      title: 'Teentaal Tukda - Kat Ta',
+      lines: [
+        ['Kat Ta Kat Ta', 'Dhere Dhere Kat Ta', 'Kat Ta Dhere Dhere', 'Kat Ta Kat Ta', 'Kat Ta Kat Ta', 'Dhere Dhere Kat Ta', 'Kat Ta Dhere Dhere', 'Kat Ta Kat Ta', 'Kat Ta Kat Ta', 'Dhere Dhere Kat Ta', 'Kat Ta Dhere Dhere', 'Kat Ta Kat Ta', 'Dha - - -', '- - - -', '- - - -', '-']
+      ]
+    }
+  },
+  vocal: {
+    yaman: {
+      name: 'Sargam Geet (Raag Yaman)',
+      taal: '16',
+      title: 'Sargam Geet - Raag Yaman (Teentaal)',
+      lines: [
+        // Asthayi Line 1
+        [
+          { content: 'Ṇ', modifier: 'dot-below' }, { content: 'R', modifier: null }, { content: 'G', modifier: null }, { content: 'M', modifier: 'vertical' },
+          { content: 'P', modifier: null }, { content: 'D', modifier: null }, { content: 'N', modifier: null }, { content: 'Ṡ', modifier: 'dot-above' },
+          { content: 'Ṡ', modifier: 'dot-above' }, { content: 'N', modifier: null }, { content: 'D', modifier: null }, { content: 'P', modifier: null },
+          { content: 'M', modifier: 'vertical' }, { content: 'G', modifier: null }, { content: 'R', modifier: null }, { content: 'S', modifier: null }
+        ],
+        // Asthayi Line 2
+        [
+          { content: 'G', modifier: null }, { content: 'G', modifier: null }, { content: 'R', modifier: null }, { content: 'S', modifier: null },
+          { content: 'Ṇ', modifier: 'dot-below' }, { content: 'R', modifier: null }, { content: 'G', modifier: null }, { content: 'M', modifier: 'vertical' },
+          { content: 'P', modifier: null }, { content: 'D', modifier: null }, { content: 'P', modifier: null }, { content: 'M', modifier: 'vertical' },
+          { content: 'G', modifier: null }, { content: 'R', modifier: null }, { content: 'G', modifier: null }, { content: 'S', modifier: null }
+        ]
+      ]
+    },
+    bhairav: {
+      name: 'Chhota Khayal Bandish (Raag Bhairav)',
+      taal: '16',
+      title: 'Bandish - Raag Bhairav (Teentaal)',
+      lines: [
+        // Bhairav uses Komal Re & Dha
+        [
+          { content: 'Jaa', modifier: null }, { content: 'go', modifier: null }, { content: 'Mo', modifier: null }, { content: 'ri', modifier: null },
+          { content: 'S', modifier: null }, { content: 'R', modifier: 'underline' }, { content: 'G', modifier: null }, { content: 'M', modifier: null },
+          { content: 'P', modifier: null }, { content: 'D', modifier: 'underline' }, { content: 'N', modifier: null }, { content: 'Ṡ', modifier: 'dot-above' },
+          { content: 'Ṡ', modifier: 'dot-above' }, { content: 'N', modifier: null }, { content: 'D', modifier: 'underline' }, { content: 'P', modifier: null }
+        ],
+        [
+          { content: 'Pyaare', modifier: null }, { content: 'tum', modifier: null }, { content: 'bin', modifier: null }, { content: 'ho', modifier: null },
+          { content: 'M', modifier: null }, { content: 'G', modifier: null }, { content: 'R', modifier: 'underline' }, { content: 'S', modifier: null },
+          { content: 'G', modifier: null }, { content: 'M', modifier: null }, { content: 'P', modifier: null }, { content: 'D', modifier: 'underline' },
+          { content: 'N', modifier: null }, { content: 'D', modifier: 'underline' }, { content: 'P', modifier: null }, { content: '-', modifier: null }
+        ]
+      ]
+    },
+    bilawal: {
+      name: 'Lakshan Geet (Raag Bilawal)',
+      taal: '16',
+      title: 'Lakshan Geet - Raag Bilawal (Teentaal)',
+      lines: [
+        [
+          { content: 'Bi', modifier: null }, { content: 'la', modifier: null }, { content: 'wa', modifier: null }, { content: 'l', modifier: null },
+          { content: 'S', modifier: null }, { content: 'R', modifier: null }, { content: 'G', modifier: null }, { content: 'M', modifier: null },
+          { content: 'P', modifier: null }, { content: 'D', modifier: null }, { content: 'N', modifier: null }, { content: 'Ṡ', modifier: 'dot-above' },
+          { content: 'Ṡ', modifier: 'dot-above' }, { content: 'N', modifier: null }, { content: 'D', modifier: null }, { content: 'P', modifier: null }
+        ]
+      ]
+    }
+  }
+};
+
+const FORMAT_OPTS = [
+  { id: 'underline', label: 'U', title: 'Underline (Komal / Double Speed)', icon: '<u>R</u>' },
+  { id: 'dot-below', label: 'D', title: 'Mandra Saptak (Dot Below / Dot Above in Paluskar)', icon: 'Ṣ' },
+  { id: 'dot-above', label: 'T', title: 'Taar Saptak (Dot Above / Line Above in Paluskar)', icon: 'Ṡ' },
+  { id: 'vertical',  label: 'V', title: 'Tivra (Vertical Line / Slanted Stroke in Paluskar)', icon: 'M|' },
+  { id: 'clear',     label: 'C', title: 'Clear Format', icon: '⨂' }
+];
+
+// 3. Translation Helper Functions
+function translateToken(token, toLanguage) {
+  if (!token) return '';
+  const cleanToken = token.trim();
+  const lowerToken = cleanToken.toLowerCase();
+  
+  if (toLanguage === 'hi') {
+    // Check direct match or stripped match (ignoring saptak markers for base translation)
+    const stripped = cleanToken.replace(/[̣̱̇॑]/g, '').toLowerCase();
+    return TRANSLATION_MAP_EN_TO_HI[stripped] || cleanToken;
+  } else {
+    return TRANSLATION_MAP_HI_TO_EN[cleanToken] || cleanToken;
+  }
+}
+
+function translateContent(content, toLanguage) {
+  if (!content || content === '-' || content === 'ऽ') return content;
+  return content.split(' ').map(token => translateToken(token, toLanguage)).join(' ');
+}
+
+function translateEntireDocument(toLanguage) {
+  notationState.lines.forEach(line => {
+    line.forEach(matra => {
+      matra.content = translateContent(matra.content, toLanguage);
+    });
+  });
+}
+
+// 4. Rendering Engine
 function renderNotationGrid() {
   const gridContainer = document.getElementById('nsGrid');
-  if (!gridContainer) return;
-  gridContainer.innerHTML = ''; // Clear current
+  const docContainer = document.getElementById('nsDocument');
+  if (!gridContainer || !docContainer) return;
+  
+  // Set system attribute for CSS styling
+  docContainer.setAttribute('data-system', notationState.system);
+  gridContainer.innerHTML = ''; 
 
   const config = TAAL_CONFIG[notationState.taal];
   
@@ -42,7 +212,6 @@ function renderNotationGrid() {
     
     let matraCounter = 0;
     
-    // Iterate through vibhags
     config.vibhags.forEach((vibhagSize, vIndex) => {
       const vibhagEl = document.createElement('div');
       vibhagEl.className = 'grid-vibhag';
@@ -50,12 +219,18 @@ function renderNotationGrid() {
       for (let i = 0; i < vibhagSize; i++) {
         const matraData = line[matraCounter];
         const isFirstOfVibhag = (i === 0);
-        const taliKhaliMarker = isFirstOfVibhag ? config.taliKhali[vIndex] : '';
+        let taliKhaliMarker = isFirstOfVibhag ? config.taliKhali[vIndex] : '';
+        
+        // Translate Tali/Khali markers for Paluskar system
+        if (taliKhaliMarker && notationState.system === 'paluskar') {
+          if (taliKhaliMarker === 'X') taliKhaliMarker = '1';
+          else if (taliKhaliMarker === '0') taliKhaliMarker = '+';
+        }
         
         const cellEl = document.createElement('div');
         cellEl.className = 'grid-cell';
         
-        // Tali/Khali Marker (only on the first line to avoid clutter, or always. Let's do always for now)
+        // Render Tali/Khali marker
         if (taliKhaliMarker) {
           const tkEl = document.createElement('div');
           tkEl.className = 'tali-khali';
@@ -69,18 +244,44 @@ function renderNotationGrid() {
         numEl.textContent = (matraCounter + 1).toString();
         cellEl.appendChild(numEl);
         
-        // Content Input (contenteditable)
+        // Content Input
         const contentEl = document.createElement('div');
         contentEl.className = 'cell-content';
         if (matraData && matraData.modifier) {
-            contentEl.classList.add(`mod-${matraData.modifier}`);
+          contentEl.classList.add(`mod-${matraData.modifier}`);
         }
         contentEl.contentEditable = true;
         contentEl.textContent = matraData ? matraData.content : '-';
         
+        // Highlight active focus
+        if (notationState.activeCell.lineIndex === lineIndex && notationState.activeCell.matraIndex === matraCounter) {
+          contentEl.style.background = 'rgba(245,166,35,0.15)';
+          contentEl.style.border = '1px dashed var(--gold)';
+        }
+        
+        // Capture indices for closure safety
+        const currentLineIdx = lineIndex;
+        const currentMatraIdx = matraCounter;
+        
         // Save state on input
         contentEl.addEventListener('input', (e) => {
-          notationState.lines[lineIndex][matraCounter].content = e.target.textContent;
+          notationState.lines[currentLineIdx][currentMatraIdx].content = e.target.textContent;
+        });
+        
+        // Save history on blur (prevents spamming history on every keystroke)
+        contentEl.addEventListener('blur', () => {
+          saveHistory();
+        });
+        
+        // Focus state visual highlight
+        contentEl.addEventListener('focus', () => {
+          document.querySelectorAll('.grid-cell .cell-content').forEach(el => {
+            el.style.background = ''; 
+            el.style.border = '';
+          });
+          contentEl.style.background = 'rgba(245,166,35,0.15)';
+          contentEl.style.border = '1px dashed var(--gold)';
+          notationState.activeCell = { lineIndex: currentLineIdx, matraIndex: currentMatraIdx };
         });
         
         cellEl.appendChild(contentEl);
@@ -93,63 +294,6 @@ function renderNotationGrid() {
     gridContainer.appendChild(rowEl);
   });
 }
-
-// 4. Initialization & Listeners
-function initNotationStudio() {
-  renderNotationGrid();
-  
-  // Topbar Toggles
-  document.querySelectorAll('.toggle-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const group = e.target.closest('.toggle-group');
-      group.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
-      e.target.classList.add('active');
-      
-      const val = e.target.getAttribute('data-val');
-      if (group.id === 'modeToggle') notationState.mode = val;
-      if (group.id === 'systemToggle') notationState.system = val;
-      if (group.id === 'langToggle') notationState.language = val;
-      
-      // We will re-render palettes in Phase 2 based on mode and language
-      console.log('State updated:', notationState);
-    });
-  });
-  
-  // Taal Selector
-  document.getElementById('nsTaal')?.addEventListener('change', (e) => {
-    const newTaal = e.target.value;
-    const config = TAAL_CONFIG[newTaal];
-    notationState.taal = newTaal;
-    // Reset lines to match new taal size
-    notationState.lines = [
-      Array.from({length: config.matras}, (_, i) => ({ matra: i + 1, content: '-', modifier: null }))
-    ];
-    renderNotationGrid();
-  });
-}
-
-// Initialize when DOM is ready
-document.addEventListener('DOMContentLoaded', () => initNotationStudio());
-
-
-// ============================================================
-// NOTATION STUDIO - INPUT & INTERACTION (PHASE 2)
-// ============================================================
-
-// --- Palette Datasets ---
-const PALETTE_DATA = {
-  tabla: {
-    en: ['Dha', 'Dhin', 'Dhun', 'Tin', 'Ta', 'Na', 'Ge', 'Ke', 'Kat', 'Tit', 'Tirakita', 'Tete', 'Dhage', 'Dhere Dhere', 'Trkt', 'Tun', 'Ti', 'Ra', 'Ki', 'Ta', '-'],
-    hi: ['धा', 'धिन', 'धुन', 'तिन', 'ता', 'ना', 'गे', 'के', 'कत', 'टिट', 'तिरकिट', 'टेटे', 'धागे', 'धेरे धेरे', 'त्रक्ट', 'तुन', 'ती', 'र', 'की', 'टा', '-', 'ऽ']
-  },
-  vocal: {
-    en: ['Sa', 'Re', 'Ga', 'Ma', 'Pa', 'Dha', 'Ni', 'S', 'R', 'G', 'M', 'P', 'D', 'N', '-'],
-    hi: ['सा', 'रे', 'ग', 'म', 'प', 'ध', 'नि', '-', 'ऽ']
-  }
-};
-
-// Track active focus
-notationState.activeCell = { lineIndex: 0, matraIndex: 0 };
 
 function renderPalette() {
   const paletteGrid = document.getElementById('paletteGrid');
@@ -169,107 +313,138 @@ function renderPalette() {
     
     paletteGrid.appendChild(el);
   });
+  
+  // Re-apply search filter if there's an active query
+  applyPaletteSearch();
 }
 
+function renderTemplatesSelect() {
+  const select = document.getElementById('nsTemplate');
+  if (!select) return;
+  
+  select.innerHTML = '<option value="">Templates...</option>';
+  
+  const modeTemplates = TEMPLATES[notationState.mode];
+  for (const key in modeTemplates) {
+    const option = document.createElement('option');
+    option.value = key;
+    option.textContent = modeTemplates[key].name;
+    select.appendChild(option);
+  }
+}
+
+// 5. Actions & Interactions
 function insertIntoActiveCell(text) {
   const { lineIndex, matraIndex } = notationState.activeCell;
   if (lineIndex < notationState.lines.length && matraIndex < notationState.lines[lineIndex].length) {
     let currentContent = notationState.lines[lineIndex][matraIndex].content;
     
-    // If it's a dash (empty), replace it. Else append with space
     if (currentContent === '-' || currentContent.trim() === '') {
       notationState.lines[lineIndex][matraIndex].content = text;
     } else {
       notationState.lines[lineIndex][matraIndex].content += ' ' + text;
     }
     
-    // Re-render the grid to show the inserted text
     renderNotationGrid();
+    saveHistory();
   }
 }
 
-// Wrap renderNotationGrid to inject focus highlighting logic
-const originalRenderNotationGrid = renderNotationGrid;
-renderNotationGrid = function() {
-  originalRenderNotationGrid();
-  
-  const gridContainer = document.getElementById('nsGrid');
-  if(!gridContainer) return;
-  
-  const rows = gridContainer.querySelectorAll('.grid-row');
-  rows.forEach((row, lIdx) => {
-    let mIdx = 0;
-    const vibhags = row.querySelectorAll('.grid-vibhag');
-    vibhags.forEach(vibhag => {
-      const cells = vibhag.querySelectorAll('.grid-cell');
-      cells.forEach(cell => {
-        const contentEl = cell.querySelector('.cell-content');
-        
-        // Restore focus visual if this is the active cell
-        if (notationState.activeCell.lineIndex === lIdx && notationState.activeCell.matraIndex === mIdx) {
-          contentEl.style.background = 'rgba(245,166,35,0.15)';
-          contentEl.style.border = '1px dashed var(--gold)';
-        }
-        
-        const capturedLIdx = lIdx;
-        const capturedMIdx = mIdx;
-        
-        // Add focus listener without re-rendering
-        contentEl.addEventListener('focus', () => {
-          // Clear all
-          document.querySelectorAll('.grid-cell .cell-content').forEach(el => {
-            el.style.background = ''; 
-            el.style.border = '';
-          });
-          // Highlight current
-          contentEl.style.background = 'rgba(245,166,35,0.15)';
-          contentEl.style.border = '1px dashed var(--gold)';
-          
-          notationState.activeCell = { lineIndex: capturedLIdx, matraIndex: capturedMIdx };
-        });
-        
-        mIdx++;
-      });
-    });
-  });
-};
+function applyModifier(modifierId) {
+  const { lineIndex, matraIndex } = notationState.activeCell;
+  if (lineIndex < notationState.lines.length && matraIndex < notationState.lines[lineIndex].length) {
+    if (modifierId === 'clear') {
+      notationState.lines[lineIndex][matraIndex].modifier = null;
+    } else {
+      notationState.lines[lineIndex][matraIndex].modifier = modifierId;
+    }
+    renderNotationGrid();
+    saveHistory();
+  }
+}
 
-// Hook into toggles
-const originalInit = initNotationStudio;
-initNotationStudio = function() {
-  originalInit();
-  renderPalette();
+function renderFormatToolbar() {
+  const container = document.getElementById('nsFormatGroup');
+  if (!container) return;
+  container.innerHTML = '';
   
-  document.querySelectorAll('.toggle-btn').forEach(btn => {
+  FORMAT_OPTS.forEach(opt => {
+    const btn = document.createElement('button');
+    btn.className = 'header-icon-btn format-btn';
+    btn.innerHTML = opt.icon;
+    btn.title = opt.title;
+    
     btn.addEventListener('click', () => {
-       // Timeout ensures state is updated by the original listener first
-       setTimeout(renderPalette, 10);
+      applyModifier(opt.id);
     });
+    container.appendChild(btn);
   });
-};
+}
 
-
-// ============================================================
-// NOTATION STUDIO - ADVANCED ENGINE & UX (PHASE 3)
-// ============================================================
-
-// --- History Engine (Undo / Redo) ---
-let historyStack = [];
-let historyIndex = -1;
-
-function saveHistory() {
-  // Deep copy lines state
-  const stateCopy = JSON.parse(JSON.stringify(notationState.lines));
+function applyPaletteSearch() {
+  const searchInput = document.getElementById('paletteSearch');
+  if (!searchInput) return;
+  const query = searchInput.value.toLowerCase();
   
-  // If we are not at the end of the stack, truncate the future
+  document.querySelectorAll('.palette-item').forEach(item => {
+    item.style.display = item.textContent.toLowerCase().includes(query) ? '' : 'none';
+  });
+}
+
+function addLineRow() {
+  const cols = TAAL_CONFIG[notationState.taal].matras;
+  const newRow = Array.from({length: cols}, (_, i) => ({ matra: i + 1, content: '-', modifier: null }));
+  notationState.lines.push(newRow);
+  renderNotationGrid();
+  saveHistory();
+}
+
+function loadTemplate(templateId) {
+  if (!templateId) return;
+  const template = TEMPLATES[notationState.mode][templateId];
+  if (!template) return;
+  
+  // Set taal
+  notationState.taal = template.taal;
+  const selectTaal = document.getElementById('nsTaal');
+  if (selectTaal) selectTaal.value = template.taal;
+  
+  // Set Title
+  const titleInput = document.getElementById('nsTitle');
+  if (titleInput) titleInput.value = template.title;
+  
+  // Load lines
+  notationState.lines = [];
+  const cols = TAAL_CONFIG[template.taal].matras;
+  
+  template.lines.forEach(lineArr => {
+    const formattedLine = lineArr.map((cellData, cIdx) => {
+      if (typeof cellData === 'string') {
+        // Simple string bol translation if language is Hindi
+        const contentVal = (notationState.language === 'hi') ? translateContent(cellData, 'hi') : cellData;
+        return { matra: cIdx + 1, content: contentVal, modifier: null };
+      } else {
+        // Object formatting (Swaras with modifiers)
+        const contentVal = (notationState.language === 'hi') ? translateContent(cellData.content, 'hi') : cellData.content;
+        return { matra: cIdx + 1, content: contentVal, modifier: cellData.modifier };
+      }
+    });
+    notationState.lines.push(formattedLine);
+  });
+  
+  renderNotationGrid();
+  saveHistory();
+}
+
+// 6. History Engine (Undo / Redo)
+function saveHistory() {
+  const stateCopy = JSON.parse(JSON.stringify(notationState.lines));
   if (historyIndex < historyStack.length - 1) {
     historyStack = historyStack.slice(0, historyIndex + 1);
   }
-  
   historyStack.push(stateCopy);
   historyIndex++;
   
-  // Cap at 50 states
   if (historyStack.length > 50) {
     historyStack.shift();
     historyIndex--;
@@ -292,49 +467,13 @@ function redo() {
   }
 }
 
-// --- Formatting Engine ---
-const FORMAT_OPTS = [
-  { id: 'underline', label: 'U', title: 'Underline (Komal / Double Speed)', icon: '<u>R</u>' },
-  { id: 'dot-below', label: 'D', title: 'Mandra Saptak (Dot Below)', icon: 'Ṣ' },
-  { id: 'dot-above', label: 'T', title: 'Taar Saptak (Dot Above)', icon: 'Ṡ' },
-  { id: 'vertical',  label: 'V', title: 'Tivra (Vertical Line)', icon: 'M|' },
-  { id: 'clear',     label: 'C', title: 'Clear Format', icon: '⨂' }
-];
-
-function renderFormatToolbar() {
-  const container = document.getElementById('nsFormatGroup');
-  if (!container) return;
-  container.innerHTML = '';
-  
-  FORMAT_OPTS.forEach(opt => {
-    const btn = document.createElement('button');
-    btn.className = 'header-icon-btn format-btn';
-    btn.innerHTML = opt.icon;
-    btn.title = opt.title;
-    
-    btn.addEventListener('click', () => {
-      const { lineIndex, matraIndex } = notationState.activeCell;
-      if (lineIndex < notationState.lines.length && matraIndex < notationState.lines[lineIndex].length) {
-        if (opt.id === 'clear') {
-          notationState.lines[lineIndex][matraIndex].modifier = null;
-        } else {
-          notationState.lines[lineIndex][matraIndex].modifier = opt.id;
-        }
-        saveHistory();
-        renderNotationGrid();
-      }
-    });
-    container.appendChild(btn);
-  });
-}
-
-// --- Export Engine ---
+// 7. PDF/PNG Export
 function setupExport() {
   document.getElementById('nsExportBtn')?.addEventListener('click', () => {
     const element = document.getElementById('nsDocument');
     const title = document.getElementById('nsTitle').value || 'Composition';
     
-    // Quick cleanup for PDF look
+    // Switch styling context temporarily to light theme printable styles
     element.style.background = '#fff';
     element.style.color = '#000';
     document.querySelectorAll('.cell-content').forEach(c => c.style.color = '#000');
@@ -349,7 +488,7 @@ function setupExport() {
     
     if (typeof html2pdf !== 'undefined') {
         html2pdf().from(element).save(title + '.pdf').then(() => {
-          // Restore dark theme inline styles
+          // Restore premium dark theme style variables
           element.style.background = '';
           element.style.color = '';
           document.querySelectorAll('.cell-content').forEach(c => c.style.color = '');
@@ -363,218 +502,83 @@ function setupExport() {
           document.querySelectorAll('.grid-row').forEach(c => c.style.borderColor = '');
         });
     } else {
-        alert("html2pdf library is not loaded. Ensure you have internet connection.");
+        alert("html2pdf library is not loaded. Ensure you are connected to the internet.");
     }
   });
 }
 
-// Hook into initializers
-const initP2 = initNotationStudio;
-initNotationStudio = function() {
-  initP2();
+// 8. Core Initialization
+function initNotationStudio() {
+  // Initial renders
+  renderTemplatesSelect();
+  renderPalette();
   renderFormatToolbar();
+  renderNotationGrid();
   setupExport();
   
-  // Wire undo/redo
+  // Wire Toggles
+  document.querySelectorAll('.toggle-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const group = e.target.closest('.toggle-group');
+      if (!group) return;
+      
+      group.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+      e.target.classList.add('active');
+      
+      const val = e.target.getAttribute('data-val');
+      
+      if (group.id === 'modeToggle') {
+        notationState.mode = val;
+        // Swap default templates list and palette content
+        renderTemplatesSelect();
+        renderPalette();
+        // Reset active composition to match mode
+        const firstKey = Object.keys(TEMPLATES[val])[0];
+        loadTemplate(firstKey);
+      }
+      
+      if (group.id === 'systemToggle') {
+        notationState.system = val;
+        renderNotationGrid();
+      }
+      
+      if (group.id === 'langToggle') {
+        const oldLang = notationState.language;
+        notationState.language = val;
+        
+        // Translate existing document cells instantly
+        if (oldLang !== val) {
+          translateEntireDocument(val);
+        }
+        
+        renderPalette();
+        renderNotationGrid();
+      }
+    });
+  });
+  
+  // Taal Selector Listener
+  document.getElementById('nsTaal')?.addEventListener('change', (e) => {
+    const newTaal = e.target.value;
+    const config = TAAL_CONFIG[newTaal];
+    notationState.taal = newTaal;
+    // Reset lines array to match the new size of the selected taal
+    notationState.lines = [
+      Array.from({length: config.matras}, (_, i) => ({ matra: i + 1, content: '-', modifier: null }))
+    ];
+    notationState.activeCell = { lineIndex: 0, matraIndex: 0 };
+    renderNotationGrid();
+    saveHistory();
+  });
+  
+  // Undo/Redo Click Listeners
   document.getElementById('nsUndo')?.addEventListener('click', undo);
   document.getElementById('nsRedo')?.addEventListener('click', redo);
   
-  // Save initial state
-  saveHistory();
-};
-
-// Wrap the insert logic to save history
-const origInsert = insertIntoActiveCell;
-insertIntoActiveCell = function(text) {
-  origInsert(text);
-  saveHistory();
-};
-
-
-// ============================================================
-// NOTATION STUDIO - AUDIO ENGINE & PALUSKAR RENDERING (PHASE 4)
-// ============================================================
-
-// --- Paluskar Rendering Patch ---
-const origRenderPhase3 = renderNotationGrid;
-renderNotationGrid = function() {
-  origRenderPhase3();
+  // Palette Search Input
+  document.getElementById('paletteSearch')?.addEventListener('input', applyPaletteSearch);
   
-  if (notationState.system === 'paluskar') {
-    const gridContainer = document.getElementById('nsGrid');
-    if(gridContainer) {
-      gridContainer.querySelectorAll('.tali-khali').forEach(tk => {
-        let val = tk.textContent;
-        if (val === 'X') val = '1';
-        else if (val === '0') val = '+';
-        tk.textContent = val;
-      });
-    }
-  }
-};
-
-// --- Audio Synthesizer Engine ---
-const nsAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
-const SWARA_FREQS = {
-  'S': 261.63, // C4
-  'R': 293.66, // D4
-  'G': 329.63, // E4
-  'M': 349.23, // F4
-  'P': 392.00, // G4
-  'D': 440.00, // A4
-  'N': 493.88, // B4
-  'Sa': 261.63,
-  'Re': 293.66,
-  'Ga': 329.63,
-  'Ma': 349.23,
-  'Pa': 392.00,
-  'Dha': 440.00,
-  'Ni': 493.88,
-  // Hindi Swaras mapping roughly
-  'सा': 261.63,
-  'रे': 293.66,
-  'ग': 329.63,
-  'म': 349.23,
-  'प': 392.00,
-  'ध': 440.00,
-  'नि': 493.88
-};
-
-function playTone(freq, type='sine', duration=0.4, startTime=nsAudioCtx.currentTime) {
-  if (!freq) return;
-  const osc = nsAudioCtx.createOscillator();
-  const gain = nsAudioCtx.createGain();
-  
-  osc.type = type;
-  osc.frequency.setValueAtTime(freq, startTime);
-  
-  const attack = Math.min(0.05, duration * 0.1);
-  gain.gain.setValueAtTime(0.001, startTime);
-  gain.gain.linearRampToValueAtTime(0.5, startTime + attack);
-  gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
-  
-  osc.connect(gain);
-  gain.connect(nsAudioCtx.destination);
-  
-  osc.start(startTime);
-  osc.stop(startTime + duration);
-}
-
-function playTablaHit(bol, startTime=nsAudioCtx.currentTime) {
-  // Simple synthetic drums for Tabla bols based on the bol text
-  let isBass = /dha|dhin|dhun|ge/i.test(bol) || /धा|धिन|धुन|गे/.test(bol);
-  let isSnare = /ta|tin|na|te|ti|ki|kat|tit/i.test(bol) || /ता|तिन|ना|ते|ती|की|कत|टिट/.test(bol);
-  
-  if (isBass) {
-     playTone(150, 'sine', 0.5, startTime); // Baya thud
-  }
-  if (isSnare) {
-     playTone(800, 'triangle', 0.2, startTime); // Daya sharp sound
-  }
-}
-
-let isPlaying = false;
-
-function playComposition() {
-  if (isPlaying) return; // Prevent multiple clicks
-  isPlaying = true;
-  
-  if (nsAudioCtx.state === 'suspended') {
-    nsAudioCtx.resume();
-  }
-  
-  const BPM = 120;
-  const matraDuration = 60 / BPM;
-  let time = nsAudioCtx.currentTime + 0.1; // start slightly in the future
-  
-  const btn = document.getElementById('nsPlayBtn');
-  if(btn) {
-      btn.style.color = '#fff';
-      btn.style.background = 'var(--gold)';
-      btn.textContent = 'STOP';
-  }
-
-  // Flatten lines for playback
-  let totalMatras = 0;
-  notationState.lines.forEach((line) => {
-    line.forEach(matra => {
-      let content = matra.content.trim();
-      if (content && content !== '-' && content !== 'ऽ') {
-         // Handle multiple notes in a cell (split by space)
-         let notes = content.split(' ');
-         let subDuration = matraDuration / notes.length;
-         
-         notes.forEach((note, i) => {
-            const t = time + (i * subDuration);
-            if (notationState.mode === 'vocal') {
-               // Vocal Mode - Try to map to pitch
-               let f = SWARA_FREQS[note] || 440;
-               // Apply modifiers
-               if (matra.modifier === 'dot-below') f = f / 2;
-               if (matra.modifier === 'dot-above') f = f * 2;
-               if (matra.modifier === 'underline') f = f * 0.943; // approx flat (1 semitone down)
-               if (matra.modifier === 'vertical') f = f * 1.059;  // approx sharp
-               
-               playTone(f, 'sine', subDuration, t);
-            } else {
-               // Tabla Mode
-               playTablaHit(note, t);
-            }
-         });
-      }
-      time += matraDuration;
-      totalMatras++;
-    });
-  });
-  
-  // Reset button when done
-  setTimeout(() => {
-    isPlaying = false;
-    if(btn) {
-        btn.style.color = 'var(--gold)';
-        btn.style.background = 'transparent';
-        btn.textContent = 'PLAY';
-    }
-  }, totalMatras * matraDuration * 1000);
-}
-
-const origInitPhase3 = initNotationStudio;
-initNotationStudio = function() {
-  origInitPhase3();
-  
-  const playBtn = document.getElementById('nsPlayBtn');
-  if(playBtn) {
-    // Replace old listener if any by cloning node, but we don't have one
-    // Actually we never wired nsPlayBtn before!
-    playBtn.addEventListener('click', () => {
-       if(isPlaying) {
-          // Can't reliably stop scheduled web audio easily without keeping references.
-          // Let's just allow the timeout to reset the button for now.
-       } else {
-          playComposition();
-       }
-    });
-  }
-};
-
-// --- Phase 5: Help, Search & Templates ---
-const origInitPhase4 = initNotationStudio;
-initNotationStudio = function() {
-  origInitPhase4();
-  
-  // Palette Search
-  const searchInput = document.getElementById('paletteSearch');
-  if (searchInput) {
-    searchInput.addEventListener('input', (e) => {
-      const query = e.target.value.toLowerCase();
-      document.querySelectorAll('.palette-btn').forEach(btn => {
-        btn.style.display = btn.textContent.toLowerCase().includes(query) ? '' : 'none';
-      });
-    });
-  }
-
-  // Tutorial Modal
+  // Tutorial Modal Show / Hide
   const helpBtn = document.getElementById('nsHelpBtn');
   const tutorialModal = document.getElementById('nsTutorialModal');
   const closeBtn = document.getElementById('nsTutorialClose');
@@ -582,57 +586,30 @@ initNotationStudio = function() {
     helpBtn.addEventListener('click', () => tutorialModal.classList.add('active'));
     closeBtn.addEventListener('click', () => tutorialModal.classList.remove('active'));
   }
-
-    // Add Row Button
-  const addRowBtn = document.getElementById('nsAddRowBtn');
-  if (addRowBtn) {
-    addRowBtn.addEventListener('click', () => {
-      const cols = notationState.taal === '16' ? 16 : parseInt(notationState.taal) || 16;
-      const newRow = Array.from({length: cols}, (_, i) => ({ matra: i + 1, content: '-', modifier: null }));
-      notationState.lines.push(newRow);
-      renderNotationGrid();
-      saveHistory();
+  
+  // Click outside to close modals (Enhances UX)
+  document.querySelectorAll('.modal-overlay').forEach(modal => {
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        modal.classList.remove('active');
+      }
     });
-  }
+  });
+  
+  // Add Line Row
+  document.getElementById('nsAddRowBtn')?.addEventListener('click', addLineRow);
+  
+  // Templates Select dropdown listener
+  document.getElementById('nsTemplate')?.addEventListener('change', (e) => {
+    loadTemplate(e.target.value);
+    e.target.value = ''; // Reset select state
+  });
+  
+  // Save base history state
+  saveHistory();
+}
 
-// Templates
-  const templateSelect = document.getElementById('nsTemplate');
-  if (templateSelect) {
-    templateSelect.addEventListener('change', (e) => {
-      const val = e.target.value;
-      if (!val) return;
-      
-      let sample = [];
-      const cols = parseInt(notationState.taal) || 16;
-      
-      if (val === 'kaida') {
-        sample = ['Dha Ti Ta Dha', 'Ti Ta Dha Dha', 'Ti Ta Dha Ge', 'Na Dha Ti Ta', 'Ta Ti Ta Ta', 'Ti Ta Ta Ta', 'Ti Ta Dha Ge', 'Na Dha Ti Ta', 'Dha Ti Ta Dha', 'Ti Ta Dha Dha', 'Ti Ta Dha Ge', 'Na Dha Ti Ta', 'Dha Ti Ta Dha', 'Ti Ta Dha Ge', 'Na Dha Ti Ta', '-'];
-      } else if (val === 'rela') {
-        sample = ['Tirakita Dha Tirakita', 'Dha Dha Tirakita', 'Dha Ge Na Dha', 'Tirakita Dha Ge', 'Tirakita Ta Tirakita', 'Ta Ta Tirakita', 'Dha Ge Na Dha', 'Tirakita Dha Ge', 'Dha Tirakita Dha', 'Dha Tirakita Dha', 'Dha Ge Na Dha', 'Tirakita Dha Ge', 'Dha Tirakita Dha', 'Tirakita Dha Ge', 'Na Dha Ti Ta', '-'];
-      } else if (val === 'tukda') {
-        sample = ['Kat Ta Kat Ta', 'Dhere Dhere Kat Ta', 'Kat Ta Dhere Dhere', 'Kat Ta Kat Ta', 'Kat Ta Kat Ta', 'Dhere Dhere Kat Ta', 'Kat Ta Dhere Dhere', 'Kat Ta Kat Ta'];
-      }
-      
-      if (notationState.mode === 'vocal') {
-        sample = ['S R G M', 'P D N S', 'S N D P', 'M G R S', 'G M P D', 'N S R G', 'G R S N', 'D P M G', 'M P D N', 'S R G M', 'G R S N', 'D P M G', 'S - - -', '- - - -', '- - - -', '- - - -'];
-      }
-      
-      notationState.lines = [];
-      let totalMats = 0;
-      let matrasArray = [];
-      
-      for(let i = 0; i < sample.length; i++) {
-        matrasArray.push({ matra: (totalMats % cols) + 1, content: sample[i], modifier: null });
-        totalMats++;
-        if(totalMats % cols === 0 || i === sample.length - 1) {
-           notationState.lines.push(matrasArray);
-           matrasArray = [];
-        }
-      }
-      
-      renderNotationGrid();
-      saveHistory();
-      e.target.value = '';
-    });
-  }
-};
+// Boot up when ready
+document.addEventListener('DOMContentLoaded', () => {
+  initNotationStudio();
+});

@@ -30,6 +30,9 @@ import time
 import numpy as np
 import librosa
 import soundfile as sf
+import uuid
+import zipfile
+import subprocess
 from flask import Flask, send_file, request, jsonify, send_from_directory, Response
 
 # ── Paths ───────────────────────────────────────────────────────
@@ -135,6 +138,13 @@ def pitch_shift_file(input_path: pathlib.Path, output_path: pathlib.Path, pitch_
 
 
 # ── API Routes ───────────────────────────────────────────────────
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response
+
 @app.route('/api/audio')
 def serve_audio():
     filename = request.args.get('file', '').strip()
@@ -244,12 +254,29 @@ def status():
 def serve_assets(filename):
     return send_from_directory(ASSETS_DIR, filename)
 
-
 @app.route('/')
 @app.route('/index.html')
 def serve_index():
     return send_from_directory(BASE_DIR, 'index.html')
 
+# Next.js builds its JS/CSS chunks at /_next/static/... (without the /separator/ prefix).
+# These MUST be served from public/separator/_next/ or they will 404.
+@app.route('/_next/<path:filename>')
+def serve_next_static(filename):
+    separator_dir = BASE_DIR / 'public' / 'separator'
+    next_path = separator_dir / '_next' / filename
+    if next_path.is_file():
+        return send_from_directory(separator_dir / '_next', filename)
+    return jsonify({'error': 'Not found'}), 404
+
+@app.route('/separator/')
+@app.route('/separator/<path:filename>')
+def serve_separator(filename="index.html"):
+    separator_dir = BASE_DIR / 'public' / 'separator'
+    file_path = separator_dir / filename
+    if file_path.is_file():
+        return send_from_directory(separator_dir, filename)
+    return send_from_directory(separator_dir, 'index.html')
 
 @app.route('/<path:filename>')
 def serve_static(filename):
@@ -258,10 +285,9 @@ def serve_static(filename):
         return send_from_directory(BASE_DIR, filename)
     return send_from_directory(BASE_DIR, 'index.html')
 
+import sys
 
-# ── Run ──────────────────────────────────────────────────────────
-
-# ── Stem Separation Route (Mock Implementation) ───────────────────
+# ── Stem Separation Route (Demucs Threading Implementation) ──────
 from werkzeug.utils import secure_filename
 import shutil
 
@@ -270,53 +296,195 @@ UPLOAD_FOLDER.mkdir(exist_ok=True)
 STEMS_FOLDER = BASE_DIR / 'audio_cache' / 'stems'
 STEMS_FOLDER.mkdir(parents=True, exist_ok=True)
 
-@app.route('/api/separate', methods=['POST'])
-def separate_audio():
-    if 'audio' not in request.files:
-        return jsonify({'error': 'No audio file part'}), 400
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
+
+# In-memory job store
+# { job_id: {"status": "processing", "progress": int, "output_dir": Path, "error": str, "zip_path": Path} }
+jobs = {}
+
+def process_audio(job_id: str, input_path: pathlib.Path):
+    try:
+        jobs[job_id]["status"] = "processing"
+        jobs[job_id]["progress"] = 10
         
-    file = request.files['audio']
+        out_dir = STEMS_FOLDER / f"out_{job_id}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        
+        cmd = [
+            sys.executable, "-m", "demucs",
+            "--out", str(out_dir),
+            "-n", "htdemucs_6s",
+            "--float32",
+            "--shifts", "1",
+            "--overlap", "0.25",
+            str(input_path)
+        ]
+        
+        jobs[job_id]["progress"] = 30
+        
+        jobs[job_id]["progress"] = 30
+        
+        log.info(f"Running Demucs for {job_id}...")
+        
+        # Start a fake progress thread that slowly increments to 90% over 5 minutes
+        def fake_progress():
+            import time
+            for i in range(30, 90):
+                if jobs[job_id]["status"] != "processing":
+                    break
+                jobs[job_id]["progress"] = i
+                time.sleep(5) # 60 steps * 5 = 300s (5 mins)
+                
+        progress_thread = threading.Thread(target=fake_progress, daemon=True)
+        progress_thread.start()
+        
+        # Use subprocess.run to capture all output seamlessly, preventing pipe buffer fills
+        process = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if process.returncode != 0:
+            log.error(f"Demucs Error Output: {process.stderr}")
+            raise Exception(f"Demucs failed with return code {process.returncode}")
+            
+        jobs[job_id]["progress"] = 90
+        
+        model_out_dir = out_dir / "htdemucs_6s" / input_path.stem
+        if not model_out_dir.exists():
+            raise Exception("Output directory not found after separation.")
+            
+        expected_stems = ["vocals.wav", "drums.wav", "bass.wav", "guitar.wav", "piano.wav", "other.wav"]
+        for stem in expected_stems:
+            stem_path = model_out_dir / stem
+            if stem_path.exists():
+                shutil.move(str(stem_path), str(out_dir / stem))
+                
+        shutil.rmtree(out_dir / "htdemucs_6s")
+        
+        zip_path = STEMS_FOLDER / f"{job_id}_stems.zip"
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for stem in expected_stems:
+                stem_file = out_dir / stem
+                if stem_file.exists():
+                    zipf.write(stem_file, arcname=stem)
+                    
+        jobs[job_id]["status"] = "completed"
+        jobs[job_id]["progress"] = 100
+        jobs[job_id]["output_dir"] = out_dir
+        jobs[job_id]["zip_path"] = zip_path
+        log.info(f"Demucs processing complete for {job_id}")
+        
+    except Exception as e:
+        log.error(f"Demucs processing error for {job_id}: {e}", exc_info=True)
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+    finally:
+        if input_path.exists():
+            input_path.unlink()
+
+@app.route('/api/separate', methods=['POST', 'OPTIONS'])
+def separate_audio():
+    if request.method == 'OPTIONS':
+        return '', 204
+        
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+        
+    file = request.files['file']
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
         
+    # Allow empty extension for files that are downloaded with truncated filenames
+    allowed_extensions = {".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".mp4", ".mkv", ".mov", ".webm", ".avi", ".wma", ".aiff", ".alac", ""}
+    ext = pathlib.Path(file.filename).suffix.lower()
+    if ext not in allowed_extensions:
+        return jsonify({'error': f'Invalid file format: {ext}'}), 400
+        
+    job_id = str(uuid.uuid4())
     filename = secure_filename(file.filename)
-    file_path = UPLOAD_FOLDER / filename
-    file.save(str(file_path))
+    input_path = UPLOAD_FOLDER / f"{job_id}{ext}"
+    file.save(str(input_path))
     
-    # Generate unique output dir name
-    file_hash = hashlib.md5(file_path.read_bytes()).hexdigest()[:8]
-    out_dir_name = f"{filename}_{file_hash}"
-    out_path = STEMS_FOLDER / out_dir_name
-    out_path.mkdir(parents=True, exist_ok=True)
-    
-    # MOCK IMPLEMENTATION:
-    # Since running Spleeter/Demucs requires heavy GPU/RAM and specific Python versions
-    # not available on Render free tier, we will mock the separation by just copying
-    # the original file to simulate 4 stems.
-    log.info(f"Mock separating stems for {filename}...")
-    
-    try:
-        shutil.copy(file_path, out_path / "vocals.wav")
-        shutil.copy(file_path, out_path / "drums.wav")
-        shutil.copy(file_path, out_path / "bass.wav")
-        shutil.copy(file_path, out_path / "other.wav")
-    except Exception as e:
-        log.error(f"Mock separation error: {e}", exc_info=True)
-        return jsonify({'error': 'Stem separation failed', 'detail': str(e)}), 500
-            
-    # Map the output files to URLs
-    stems = {
-        'vocals': f"/api/stems/{out_dir_name}/vocals.wav",
-        'drums': f"/api/stems/{out_dir_name}/drums.wav",
-        'bass': f"/api/stems/{out_dir_name}/bass.wav",
-        'other': f"/api/stems/{out_dir_name}/other.wav"
+    jobs[job_id] = {
+        "status": "queued",
+        "progress": 0,
     }
     
-    return jsonify({'stems': stems})
+    threading.Thread(target=process_audio, args=(job_id, input_path), daemon=True).start()
+    
+    return jsonify({"job_id": job_id, "status": "queued"})
 
-@app.route('/api/stems/<path:filename>')
-def serve_stems(filename):
-    return send_from_directory(STEMS_FOLDER, filename)
+@app.route('/api/job_status/<job_id>')
+def get_job_status(job_id):
+    if job_id not in jobs:
+        return jsonify({'error': 'Job not found'}), 404
+    return jsonify({
+        "status": jobs[job_id]["status"],
+        "progress": jobs[job_id]["progress"],
+        "error": jobs[job_id].get("error", "")
+    })
+
+@app.route('/api/stems/<job_id>/<stem_name>')
+def get_stem(job_id, stem_name):
+    if job_id not in jobs or jobs[job_id]["status"] != "completed":
+        return jsonify({'error': 'Stem not ready or job not found'}), 404
+        
+    stem_path = jobs[job_id]["output_dir"] / stem_name
+    if not stem_path.exists():
+        return jsonify({'error': 'Stem file not found'}), 404
+        
+    response = send_file(stem_path, mimetype='audio/wav')
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+@app.route('/api/download/<job_id>')
+def download_stems(job_id):
+    if job_id not in jobs or jobs[job_id]["status"] != "completed":
+        return jsonify({'error': 'Job not ready or not found'}), 404
+        
+    zip_path = jobs[job_id]["zip_path"]
+    if not zip_path.exists():
+        return jsonify({'error': 'ZIP file not found'}), 404
+        
+    # Removed the immediate 10-second cleanup thread here so the player doesn't crash!
+    # The global cache cleanup thread (cleanup_cache_thread) will safely remove these 
+    # when the cache exceeds 500MB.
+    
+    response = send_file(zip_path, mimetype='application/zip', as_attachment=True, download_name="separated_stems.zip")
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+@app.route('/api/cleanup/<job_id>', methods=['DELETE', 'OPTIONS'])
+def cleanup_job(job_id):
+    if request.method == 'OPTIONS':
+        return '', 204
+        
+    if job_id not in jobs:
+        return jsonify({'error': 'Job not found'}), 404
+        
+    try:
+        # Delete the stems folder and zip file
+        out_dir = STEMS_FOLDER / f"out_{job_id}"
+        zip_path = STEMS_FOLDER / f"{job_id}_stems.zip"
+        
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+            
+        if zip_path.exists():
+            zip_path.unlink()
+            
+        # Clean up any lingering uploaded files just in case it crashed midway
+        for ext in [".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".mp4", ".mkv", ".mov", ".webm", ".avi", ".wma", ".aiff", ".alac", ""]:
+            input_path = UPLOAD_FOLDER / f"{job_id}{ext}"
+            if input_path.exists():
+                input_path.unlink()
+                
+        # Remove from tracking memory
+        del jobs[job_id]
+        
+        log.info(f"Cleaned up job {job_id} successfully.")
+        return jsonify({"status": "cleaned"})
+    except Exception as e:
+        log.error(f"Cleanup error for {job_id}: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to clean up'}), 500
 
 if __name__ == '__main__':
     log.info("=" * 60)

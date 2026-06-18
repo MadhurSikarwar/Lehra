@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lehra-studio-v10';
+const CACHE_NAME = 'lehra-studio-v11';
 const ASSETS = [
   './',
   './index.html',
@@ -22,7 +22,12 @@ self.addEventListener('install', event => {
 self.addEventListener('fetch', event => {
   // Only cache GET requests, and don't cache API calls in the Service Worker 
   // (We'll use IndexedDB for the heavy audio API calls)
-  if (event.request.method !== 'GET' || event.request.url.includes('/api/')) {
+  if (
+    event.request.method !== 'GET' || 
+    event.request.url.includes('/api/') ||
+    event.request.url.includes('/separator') ||
+    event.request.url.includes('/_next')
+  ) {
     return;
   }
 

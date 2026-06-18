@@ -1,3 +1,14 @@
 __pycache__/
+*.py[cod]
+*$py.class
 audio_cache/
+uploads/
+separated/
+test_demucs/
+test_output.txt
+*.log
+stem-frontend/node_modules/
+stem-frontend/.next/
+stem-frontend/out/
 .DS_Store
+Thumbs.db

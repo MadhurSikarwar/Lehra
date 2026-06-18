@@ -1576,14 +1576,16 @@ body.fullscreen-mode .np-waveform {
 }
 
 /* Modifiers */
-.mod-underline {
+
+/* --- BHATKHANDE SYSTEM (Default) --- */
+[data-system="bhatkhande"] .mod-underline {
   border-bottom: 2px solid var(--text-sub);
   padding-bottom: 2px;
 }
-.mod-dot-below {
+[data-system="bhatkhande"] .mod-dot-below {
   position: relative;
 }
-.mod-dot-below::after {
+[data-system="bhatkhande"] .mod-dot-below::after {
   content: '.';
   position: absolute;
   bottom: -10px;
@@ -1591,12 +1593,10 @@ body.fullscreen-mode .np-waveform {
   transform: translateX(-50%);
   font-weight: bold;
 }
-
-
-.mod-dot-above {
+[data-system="bhatkhande"] .mod-dot-above {
   position: relative;
 }
-.mod-dot-above::before {
+[data-system="bhatkhande"] .mod-dot-above::before {
   content: '.';
   position: absolute;
   top: -12px;
@@ -1604,15 +1604,71 @@ body.fullscreen-mode .np-waveform {
   transform: translateX(-50%);
   font-weight: bold;
 }
-.mod-vertical {
+[data-system="bhatkhande"] .mod-vertical {
   position: relative;
 }
-.mod-vertical::after {
+[data-system="bhatkhande"] .mod-vertical::before {
   content: '|';
   position: absolute;
-  right: -8px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 1.2rem;
-  font-weight: 300;
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+
+/* --- PALUSKAR SYSTEM --- */
+[data-system="paluskar"] .mod-underline {
+  position: relative;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+[data-system="paluskar"] .mod-underline::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  width: 8px;
+  height: 2px;
+  background: currentColor;
+  transform: translateX(-50%) rotate(-30deg);
+}
+[data-system="paluskar"] .mod-vertical {
+  position: relative;
+}
+[data-system="paluskar"] .mod-vertical::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  width: 8px;
+  height: 2px;
+  background: currentColor;
+  transform: translateX(-50%) rotate(30deg);
+}
+[data-system="paluskar"] .mod-dot-below {
+  position: relative;
+}
+[data-system="paluskar"] .mod-dot-below::before {
+  content: '.';
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-weight: bold;
+}
+[data-system="paluskar"] .mod-dot-below::after {
+  display: none;
+}
+[data-system="paluskar"] .mod-dot-above {
+  position: relative;
+}
+[data-system="paluskar"] .mod-dot-above::before {
+  content: '|';
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.8rem;
+  font-weight: bold;
 }
