@@ -28,6 +28,7 @@ export default function Home() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "uploading" | "queued" | "processing" | "completed" | "error">("idle");
   const [progress, setProgress] = useState(0);
+  const [logs, setLogs] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -101,6 +102,9 @@ export default function Home() {
           console.log('Status Response:', res.data);
           setProgress(res.data.progress || 0);
           setStatus(res.data.status);
+          if (res.data.logs) {
+            setLogs(res.data.logs);
+          }
           if (res.data.status === 'completed') {
             console.log('Separation Complete!');
           }
@@ -130,7 +134,7 @@ export default function Home() {
   };
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-4 sm:p-6 relative">
+    <div className="flex flex-col items-center justify-center min-h-screen p-4 sm:p-8 md:p-12 relative">
       
       {/* Background Floating Orbs */}
       <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-[#f5a623]/10 rounded-full blur-[120px] pointer-events-none animate-pulse-slow"></div>
@@ -142,17 +146,17 @@ export default function Home() {
           initial={{ y: -30, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-          className="text-center mb-20 relative flex flex-col items-center"
+          className="text-center mb-24 relative flex flex-col items-center"
         >
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#f5a623]/10 border border-[#f5a623]/10 text-[#f5a623] text-sm font-medium mb-6 shadow-sm">
+          <div className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-[#f5a623]/10 border border-[#f5a623]/10 text-[#f5a623] text-sm font-medium mb-8 shadow-sm">
             <Sparkles className="w-4 h-4" />
             <span>AI Powered Audio Extraction</span>
           </div>
           
-          <h1 className="text-5xl md:text-7xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white via-white to-white/70 mb-6 drop-shadow-lg">
+          <h1 className="text-4xl sm:text-5xl md:text-7xl font-bold tracking-tighter text-white mb-6 drop-shadow-lg font-cinzel uppercase px-2">
             AI Stem Separator
           </h1>
-          <p className="text-lg md:text-xl text-zinc-500 max-w-[700px] mx-auto font-light leading-loose">
+          <p className="text-base sm:text-lg md:text-xl text-zinc-500 max-w-[540px] mx-auto text-center font-light leading-relaxed px-4">
             Extract studio-quality vocals, drums, bass, guitar, piano, and other instruments from any audio file instantly. Powered by state-of-the-art Hybrid Demucs deep learning.
           </p>
         </motion.div>
@@ -168,16 +172,17 @@ export default function Home() {
               className="w-full max-w-2xl flex flex-col items-center"
             >
               {/* Premium Glass Upload Card */}
-              <div className="glass-panel rounded-[2rem] p-16 w-full flex flex-col items-center relative group transition-all hover:shadow-[0_24px_64px_rgba(0,0,0,0.5)]">
+              <div className="glass-panel rounded-[2rem] md:rounded-[2.5rem] p-8 sm:p-12 md:p-20 w-full flex flex-col items-center relative group transition-all hover:shadow-[0_24px_64px_rgba(0,0,0,0.5)]">
                 
                 {!file ? (
                   <div 
                     onDragOver={onDragOver}
                     onDrop={onDrop}
                     onClick={() => fileInputRef.current?.click()}
-                    className="w-full flex flex-col items-center justify-center cursor-pointer py-16 rounded-2xl border-2 border-dashed border-zinc-700/30 hover:border-[#f5a623]/30 hover:bg-[#f5a623]/[0.02] transition-all duration-300"
+                    className="w-full flex flex-col items-center justify-center cursor-pointer py-12 sm:py-16 md:py-20 rounded-[1.5rem] md:rounded-[26px] transition-all duration-300 hover:shadow-[0_0_50px_rgba(245,166,35,0.12)] px-4 text-center"
+                    style={{ background: 'var(--bg-card)', border: '1px solid var(--border-gold)' }}
                   >
-                    <div className="w-20 h-20 bg-white/5 rounded-full flex items-center justify-center mb-8 group-hover:scale-105 transition-transform duration-500 shadow-sm">
+                    <div className="w-20 h-20 sm:w-24 sm:h-24 bg-white/5 rounded-full flex items-center justify-center mb-8 sm:mb-10 group-hover:scale-105 transition-transform duration-500 shadow-sm">
                       <UploadCloud className="w-10 h-10 text-zinc-500 group-hover:text-[#f5a623] transition-colors" />
                     </div>
                     <h3 className="text-2xl font-semibold text-white mb-4">Drag & Drop Audio</h3>
@@ -229,18 +234,18 @@ export default function Home() {
               </div>
 
               {/* Trust Badges */}
-              <div className="mt-7 flex items-center justify-center gap-8 flex-wrap opacity-40">
-                <div className="flex items-center gap-2 text-white text-sm font-medium tracking-wide">
-                  <Zap className="w-4 h-4 text-[#f5a623]" />
-                  Hybrid Demucs Engine
+              <div className="mt-12 flex items-center justify-center gap-6 flex-wrap">
+                <div className="flex items-center gap-2 text-[0.7rem] font-medium tracking-[0.04em] px-3 py-1.5 rounded-[20px]" style={{ background: 'rgba(245,166,35,0.06)', border: '1px solid var(--border-gold)', color: 'var(--text-sub)' }}>
+                  <Zap className="w-3.5 h-3.5 text-[#f5a623]" />
+                  <span>Hybrid Demucs Engine</span>
                 </div>
-                <div className="flex items-center gap-2 text-white text-sm font-medium tracking-wide">
-                  <Layers className="w-4 h-4 text-[#f5a623]" />
-                  6-Stem Extraction
+                <div className="flex items-center gap-2 text-[0.7rem] font-medium tracking-[0.04em] px-3 py-1.5 rounded-[20px]" style={{ background: 'rgba(245,166,35,0.06)', border: '1px solid var(--border-gold)', color: 'var(--text-sub)' }}>
+                  <Layers className="w-3.5 h-3.5 text-[#f5a623]" />
+                  <span>6-Stem Extraction</span>
                 </div>
-                <div className="flex items-center gap-2 text-white text-sm font-medium tracking-wide">
-                  <ShieldCheck className="w-4 h-4 text-[#f5a623]" />
-                  Lossless Export
+                <div className="flex items-center gap-2 text-[0.7rem] font-medium tracking-[0.04em] px-3 py-1.5 rounded-[20px]" style={{ background: 'rgba(245,166,35,0.06)', border: '1px solid var(--border-gold)', color: 'var(--text-sub)' }}>
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#f5a623]" />
+                  <span>Lossless Export</span>
                 </div>
               </div>
 
@@ -263,7 +268,7 @@ export default function Home() {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95, filter: "blur(10px)" }}
               transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-              className="w-full max-w-xl glass-panel rounded-[2rem] p-12 flex flex-col items-center justify-center relative overflow-hidden"
+              className="w-full max-w-xl glass-panel rounded-[2rem] md:rounded-[2.5rem] p-8 sm:p-12 md:p-16 flex flex-col items-center justify-center relative"
             >
               <div className="absolute inset-0 bg-gradient-to-b from-[#f5a623]/10 to-transparent animate-pulse-slow" />
               
@@ -275,17 +280,17 @@ export default function Home() {
                 <div className="absolute inset-0 border border-[#f5a623]/30 rounded-full animate-ping" style={{ animationDuration: '3s' }}></div>
               </div>
 
-              <h3 className="text-3xl font-semibold text-white mb-3">
+              <h3 className="text-2xl sm:text-3xl md:text-4xl font-semibold text-white mb-4 md:mb-6 text-center">
                 {status === "uploading" ? "Uploading Audio..." : 
                  status === "queued" ? "Waiting in Queue..." : 
                  "Analyzing Frequencies"}
               </h3>
               
-              <p className="text-zinc-400 font-medium mb-10 text-center max-w-sm">
+              <p className="text-zinc-400 font-medium mb-10 md:mb-14 text-center max-w-sm text-sm sm:text-base md:text-lg leading-relaxed">
                 {status === "processing" ? "The AI is isolating vocals, drums, bass, guitar, piano, and other instruments." : "Preparing your file for deep learning extraction."}
               </p>
               
-              <div className="w-full bg-black/50 rounded-full h-4 mb-3 overflow-hidden p-1 border border-white/5 relative z-10 shadow-inner">
+              <div className="w-full bg-black/50 rounded-full h-5 mb-4 overflow-hidden p-1 border border-white/5 relative z-10 shadow-inner">
                 <motion.div 
                   className="bg-gradient-to-r from-[#f5a623] to-[#e8572a] h-full rounded-full shadow-[0_0_15px_rgba(245,166,35,0.8)] relative overflow-hidden"
                   initial={{ width: 0 }}
@@ -296,10 +301,35 @@ export default function Home() {
                   <div className="absolute top-0 bottom-0 left-0 right-0 bg-gradient-to-b from-white/30 to-transparent"></div>
                 </motion.div>
               </div>
-              <div className="flex justify-between w-full px-1">
+              <div className="flex justify-between w-full px-2 mb-8">
                 <span className="text-xs text-zinc-500 font-medium uppercase tracking-wider">Processing</span>
                 <span className="text-xs text-[#f5a623] font-bold">{progress}%</span>
               </div>
+
+              {/* Live Terminal Output */}
+              {logs.length > 0 && (
+                <div 
+                  className="w-full bg-[#090806] border border-white/5 rounded-2xl p-6 h-48 overflow-y-auto font-mono text-[0.7rem] text-[#f5a623]/70 leading-loose shadow-[inset_0_4px_20px_rgba(0,0,0,0.5)] relative flex flex-col-reverse"
+                  style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+                >
+                  {/* Custom CSS to hide webkit scrollbar */}
+                  <style dangerouslySetInnerHTML={{__html: `
+                    div::-webkit-scrollbar { display: none; }
+                  `}} />
+                  <div className="absolute top-0 left-0 right-0 h-10 bg-gradient-to-b from-[#090806] to-transparent pointer-events-none z-10"></div>
+                  <div className="flex flex-col gap-1.5">
+                    {logs.map((log, i) => (
+                      <div key={i} className="whitespace-pre-wrap break-words opacity-80 hover:opacity-100 transition-opacity">
+                        <span className="text-[#f5a623]/40 mr-3">❯</span>{log}
+                      </div>
+                    ))}
+                    <div className="flex items-center mt-2">
+                      <span className="text-[#f5a623]/40 mr-3">❯</span>
+                      <div className="animate-pulse w-2 h-3.5 bg-[#f5a623] inline-block opacity-80"></div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
 
@@ -325,8 +355,8 @@ export default function Home() {
               <div className="w-24 h-24 bg-red-500/10 border border-red-500/20 rounded-full flex items-center justify-center mx-auto mb-8 shadow-[0_0_30px_rgba(239,68,68,0.2)]">
                 <FileAudio className="w-12 h-12 text-red-500" />
               </div>
-              <h3 className="text-3xl font-bold text-white mb-4">Processing Failed</h3>
-              <p className="text-red-400/90 mb-10 bg-red-500/5 p-4 rounded-xl border border-red-500/10">{errorMsg}</p>
+              <h3 className="text-2xl sm:text-3xl font-bold text-white mb-4">Processing Failed</h3>
+              <p className="text-red-400/90 mb-8 md:mb-10 bg-red-500/5 p-4 rounded-xl border border-red-500/10 text-sm md:text-base">{errorMsg}</p>
               <button 
                 onClick={handleReset}
                 className="bg-white/10 hover:bg-white/15 border border-white/20 text-white px-8 py-4 rounded-xl font-semibold transition-all hover:-translate-y-1 shadow-lg"
@@ -435,64 +465,64 @@ function StemPlayer({ jobId, onReset, fileName }: { jobId: string, onReset: () =
   const handleVolume = (stem: string, val: number) => setVolumes(p => ({ ...p, [stem]: val }));
 
   return (
-    <div className="glass-panel rounded-[2rem] p-8 md:p-12 w-full mt-6">
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-12 pb-8 border-b border-white/10 gap-8">
-        <div className="flex items-center gap-6">
+    <div className="glass-panel rounded-[2rem] md:rounded-[2.5rem] p-6 sm:p-10 md:p-16 w-full mt-6 md:mt-10">
+      <div className="flex flex-col xl:flex-row items-center justify-between mb-10 md:mb-16 pb-8 md:pb-10 border-b border-white/10 gap-8">
+        <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6 w-full xl:w-auto text-center sm:text-left">
           <button 
             onClick={togglePlay}
-            className="w-20 h-20 shrink-0 rounded-2xl bg-gradient-to-br from-[#f5a623] to-[#e8572a] hover:-translate-y-1 flex items-center justify-center text-black transition-all shadow-[0_10px_30px_rgba(245,166,35,0.4)]"
+            className="w-16 h-16 sm:w-20 sm:h-20 shrink-0 rounded-[1.2rem] sm:rounded-2xl bg-gradient-to-br from-[#f5a623] to-[#e8572a] hover:-translate-y-1 flex items-center justify-center text-black transition-all shadow-[0_10px_30px_rgba(245,166,35,0.4)]"
           >
-            {isPlaying ? <Pause className="w-10 h-10 fill-black" /> : <Play className="w-10 h-10 ml-2 fill-black" />}
+            {isPlaying ? <Pause className="w-8 h-8 sm:w-10 sm:h-10 fill-black" /> : <Play className="w-8 h-8 sm:w-10 sm:h-10 ml-2 fill-black" />}
           </button>
-          <div className="flex flex-col">
-            <h2 className="text-3xl font-bold text-white tracking-tight mb-2">Extraction Complete</h2>
-            <div className="flex items-center gap-3 text-zinc-400 bg-black/30 px-4 py-2 rounded-lg border border-white/5 w-fit">
-              <FileAudio className="w-4 h-4 text-[#f5a623]" />
-              <span className="truncate max-w-[200px] sm:max-w-xs text-sm">{fileName}</span>
+          <div className="flex flex-col items-center sm:items-start w-full">
+            <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight mb-2">Extraction Complete</h2>
+            <div className="flex items-center justify-center sm:justify-start gap-3 text-zinc-400 bg-black/30 px-3 sm:px-4 py-2 rounded-lg border border-white/5 w-full sm:w-fit max-w-full">
+              <FileAudio className="w-4 h-4 shrink-0 text-[#f5a623]" />
+              <span className="truncate max-w-[180px] sm:max-w-[200px] md:max-w-xs text-xs sm:text-sm">{fileName}</span>
             </div>
           </div>
         </div>
         
-        <div className="flex items-center gap-4 bg-black/40 p-2 rounded-2xl border border-white/5 w-full md:w-auto">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-3 sm:gap-4 bg-black/40 p-2 rounded-2xl border border-white/5 w-full xl:w-auto">
           <button 
             onClick={downloadZip}
-            className="flex-1 md:flex-none glass-button px-6 py-4 rounded-xl flex items-center justify-center gap-3 text-white font-semibold hover:shadow-[0_0_20px_rgba(245,166,35,0.2)] transition-shadow"
+            className="glass-button px-4 sm:px-6 py-3 sm:py-4 rounded-xl flex items-center justify-center gap-2 sm:gap-3 text-white font-semibold hover:shadow-[0_0_20px_rgba(245,166,35,0.2)] transition-shadow text-sm sm:text-base whitespace-nowrap"
           >
-            <Download className="w-5 h-5 text-[#f5a623]" />
+            <Download className="w-4 h-4 sm:w-5 sm:h-5 text-[#f5a623]" />
             Download ZIP
           </button>
-          <div className="w-px h-10 bg-white/10"></div>
+          <div className="hidden sm:block w-px h-8 sm:h-10 bg-white/10"></div>
           <button 
             onClick={onReset} 
-            className="px-6 py-4 rounded-xl text-zinc-400 hover:text-white font-medium transition-colors"
+            className="px-4 sm:px-6 py-3 sm:py-4 rounded-xl text-zinc-400 hover:text-white font-medium transition-colors text-sm sm:text-base whitespace-nowrap"
           >
             Start New
           </button>
         </div>
       </div>
 
-      <div className="flex flex-col gap-8">
+      <div className="flex flex-col gap-8 md:gap-10">
         {stems.map((stem) => {
           const isMuted = mutes[stem] || (isSoloActive && !solos[stem]);
           
           return (
             <div key={stem} className="bg-black/30 hover:bg-black/40 transition-colors rounded-2xl p-5 border border-white/5 flex flex-col lg:flex-row gap-8 items-center group">
               <div className="flex flex-col gap-5 w-full lg:w-56 shrink-0 bg-black/20 p-4 rounded-xl border border-white/5">
-                <div className="flex items-center justify-between">
-                  <span className="capitalize font-bold text-lg text-white tracking-wide flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-[#f5a623]"></div>
+                <div className="flex items-center justify-between pb-3 border-b border-white/5 mb-2">
+                  <span className="uppercase font-semibold text-[0.85rem] tracking-[0.1em] flex items-center gap-2 font-cinzel text-[#f5a623]">
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#f5a623]"></div>
                     {stem}
                   </span>
                   <div className="flex gap-2">
                     <button 
                       onClick={() => toggleSolo(stem)}
-                      className={`text-xs px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm ${solos[stem] ? 'bg-[#f5a623] text-black shadow-[#f5a623]/20' : 'bg-white/5 text-zinc-400 hover:bg-white/10'}`}
+                      className={`header-icon-btn ${solos[stem] ? 'active' : ''}`}
                     >
                       SOLO
                     </button>
                     <button 
                       onClick={() => toggleMute(stem)}
-                      className={`text-xs px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm ${mutes[stem] ? 'bg-red-500 text-white shadow-red-500/20' : 'bg-white/5 text-zinc-400 hover:bg-white/10'}`}
+                      className={`header-icon-btn ${mutes[stem] ? 'active-red' : ''}`}
                     >
                       MUTE
                     </button>
@@ -506,6 +536,7 @@ function StemPlayer({ jobId, onReset, fileName }: { jobId: string, onReset: () =
                     value={volumes[stem]} 
                     onChange={(e) => handleVolume(stem, parseFloat(e.target.value))}
                     className="flex-1 opacity-70 group-hover:opacity-100 transition-opacity"
+                    style={{ '--val': `${volumes[stem] * 100}%` } as React.CSSProperties}
                   />
                 </div>
               </div>

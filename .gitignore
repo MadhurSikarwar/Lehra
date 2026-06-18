@@ -12,3 +12,12 @@ stem-frontend/.next/
 stem-frontend/out/
 .DS_Store
 Thumbs.db
+
+# Demucs outputs
+out/
+
+# Environment and Virtualenvs
+.env
+.venv/
+venv/
+env/

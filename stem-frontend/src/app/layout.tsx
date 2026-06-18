@@ -50,6 +50,7 @@ export default function RootLayout({
           <nav className="site-nav">
             <a className="nav-btn" href="/" style={{textDecoration: 'none'}}>Lehra Player</a>
             <a className="nav-btn active" href="/separator/" style={{textDecoration: 'none'}}>Stem Separator</a>
+            <a className="nav-btn" href="/" style={{textDecoration: 'none'}}>Notation Editor</a>
           </nav>
           <div className="header-right">
             <div className="header-badge" id="loadingBadge">Web Player</div>

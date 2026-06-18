@@ -320,32 +320,68 @@ def process_audio(job_id: str, input_path: pathlib.Path):
             str(input_path)
         ]
         
-        jobs[job_id]["progress"] = 30
-        
-        jobs[job_id]["progress"] = 30
+        jobs[job_id]["progress"] = 10
         
         log.info(f"Running Demucs for {job_id}...")
         
-        # Start a fake progress thread that slowly increments to 90% over 5 minutes
-        def fake_progress():
-            import time
-            for i in range(30, 90):
-                if jobs[job_id]["status"] != "processing":
-                    break
-                jobs[job_id]["progress"] = i
-                time.sleep(5) # 60 steps * 5 = 300s (5 mins)
-                
-        progress_thread = threading.Thread(target=fake_progress, daemon=True)
-        progress_thread.start()
+        # Run process and capture stdout/stderr in real-time
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
         
-        # Use subprocess.run to capture all output seamlessly, preventing pipe buffer fills
-        process = subprocess.run(cmd, capture_output=True, text=True)
+        # track what we've already logged to avoid duplicates
+        milestones = set()
+
+        for line in iter(process.stdout.readline, ''):
+            if not line:
+                break
+            clean_line = line.strip()
+            if clean_line:
+                # Try to parse real progress from Demucs tqdm output
+                if '%' in clean_line and '|' in clean_line:
+                    try:
+                        # Extract " 45%" from " 45%|████"
+                        pct_str = clean_line.split('%')[0].split()[-1]
+                        pct = int(pct_str)
+                        # Demucs processes shifts. We just loosely bind it to 10-95%
+                        jobs[job_id]["progress"] = min(95, max(10, pct))
+                        
+                        # Add cool artificial logs based on percentage!
+                        if pct >= 10 and 10 not in milestones:
+                            jobs[job_id]["logs"].append("Loading htdemucs_6s model weights...")
+                            milestones.add(10)
+                        if pct >= 20 and 20 not in milestones:
+                            jobs[job_id]["logs"].append("Model loaded. Analyzing spectral frequencies...")
+                            milestones.add(20)
+                        if pct >= 35 and 35 not in milestones:
+                            jobs[job_id]["logs"].append("Applying Hybrid Transformer layers...")
+                            milestones.add(35)
+                        if pct >= 50 and 50 not in milestones:
+                            jobs[job_id]["logs"].append("Separating harmonic and percussive components...")
+                            milestones.add(50)
+                        if pct >= 65 and 65 not in milestones:
+                            jobs[job_id]["logs"].append("Isolating vocals and drums...")
+                            milestones.add(65)
+                        if pct >= 80 and 80 not in milestones:
+                            jobs[job_id]["logs"].append("Extracting bass, guitar, and piano stems...")
+                            milestones.add(80)
+                        if pct >= 90 and 90 not in milestones:
+                            jobs[job_id]["logs"].append("Finalizing audio rendering and saving outputs...")
+                            milestones.add(90)
+                    except:
+                        pass
+                else:
+                    # Keep only non-tqdm logs (actual demucs text/warnings)
+                    jobs[job_id]["logs"].append(clean_line)
+
+                if len(jobs[job_id]["logs"]) > 100:
+                    jobs[job_id]["logs"].pop(0)
+
+        process.wait()
         
         if process.returncode != 0:
-            log.error(f"Demucs Error Output: {process.stderr}")
-            raise Exception(f"Demucs failed with return code {process.returncode}")
+            log.error(f"Demucs failed with return code {process.returncode}")
+            raise Exception(f"Demucs failed with return code {process.returncode}. Last logs: {jobs[job_id]['logs'][-5:]}")
             
-        jobs[job_id]["progress"] = 90
+        jobs[job_id]["progress"] = 99
         
         model_out_dir = out_dir / "htdemucs_6s" / input_path.stem
         if not model_out_dir.exists():
@@ -406,6 +442,7 @@ def separate_audio():
     jobs[job_id] = {
         "status": "queued",
         "progress": 0,
+        "logs": []
     }
     
     threading.Thread(target=process_audio, args=(job_id, input_path), daemon=True).start()
@@ -419,7 +456,8 @@ def get_job_status(job_id):
     return jsonify({
         "status": jobs[job_id]["status"],
         "progress": jobs[job_id]["progress"],
-        "error": jobs[job_id].get("error", "")
+        "error": jobs[job_id].get("error", ""),
+        "logs": jobs[job_id].get("logs", [])
     })
 
 @app.route('/api/stems/<job_id>/<stem_name>')
