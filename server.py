@@ -33,7 +33,18 @@ import soundfile as sf
 import uuid
 import zipfile
 import subprocess
+import mimetypes
 from flask import Flask, send_file, request, jsonify, send_from_directory, Response
+
+# Ensure mimetypes are registered for Docker slim which might lack /etc/mime.types
+mimetypes.add_type('text/css', '.css')
+mimetypes.add_type('application/javascript', '.js')
+mimetypes.add_type('image/svg+xml', '.svg')
+mimetypes.add_type('application/json', '.json')
+mimetypes.add_type('audio/wav', '.wav')
+mimetypes.add_type('audio/mpeg', '.mp3')
+mimetypes.add_type('audio/aac', '.aac')
+
 
 # ── Paths ───────────────────────────────────────────────────────
 BASE_DIR   = pathlib.Path(__file__).parent.resolve()   # .../webapp/

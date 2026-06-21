@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies (ffmpeg and libsndfile for librosa/audioread)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg libsndfile1 && \
+    apt-get install -y --no-install-recommends ffmpeg libsndfile1 mailcap && \
     rm -rf /var/lib/apt/lists/*
 
 # Set working directory
