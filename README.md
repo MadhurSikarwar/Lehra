@@ -47,22 +47,74 @@ Both applications are built with a breathtaking, dark-mode premium aesthetic:
 
 ---
 
-## Getting Started
+## 🆕 Recent Updates
 
-1. Install Python dependencies (requires `torch` and `demucs`):
+- **Frontend & UI:** Initialized `stem-frontend` layout with Next.js, added play/pause notation controls, and deployed static separator assets with service worker updates.
+- **Audio Engine:** Implemented the core Web Audio engine for robust, artifact-free playback.
+- **Docker & Deployment:** Added `Dockerfile` using Gunicorn, fixed file serving issues in Docker slim images by adding `mailcap` for MIME types, and set up Cloudflare tunneling.
+
+---
+
+## 🚀 Getting Started
+
+Follow these instructions to run the website after cloning the repository.
+
+### Prerequisites
+- Git
+- Python 3.11+
+- Node.js (if modifying the Next.js frontend)
+- Docker (optional, for containerized running)
+
+### Method 1: Running with Docker (Recommended)
+
+1. **Clone the repository:**
    ```bash
-   pip install flask librosa soundfile numpy demucs
+   git clone <repository-url>
+   cd <repository-folder>/webapp
    ```
-2. Run the Next.js production build and copy to public (optional, if you're modifying frontend source code):
+
+2. **Build the Docker image:**
+   ```bash
+   docker build -t lehrastudio-webapp .
+   ```
+
+3. **Run the Docker container:**
+   ```bash
+   docker run -p 3000:3000 lehrastudio-webapp
+   ```
+4. Open `http://localhost:3000` in your web browser.
+
+### Method 2: Running Locally (Python + Node.js)
+
+1. **Clone the repository and navigate to the webapp directory:**
+   ```bash
+   git clone <repository-url>
+   cd <repository-folder>/webapp
+   ```
+
+2. **Install Python dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **(Optional) Build the Next.js frontend:**
+   *If you are modifying the frontend source code in `stem-frontend`.*
    ```bash
    cd stem-frontend
    npm install
    npm run build
-   cp -r out/* ../public/separator/
+   # On Windows (PowerShell): Copy-Item -Path "out\*" -Destination "..\public\separator\" -Recurse -Force
+   # On Mac/Linux: cp -r out/* ../public/separator/
+   cd ..
    ```
-3. Run the Python backend server:
+
+4. **Run the Python backend server:**
    ```bash
-   cd webapp
    python server.py
    ```
-4. Open `http://localhost:3000` in your web browser.
+   *Alternatively, run with Gunicorn:*
+   ```bash
+   gunicorn --bind 0.0.0.0:3000 --workers 1 --threads 2 server:app
+   ```
+
+5. Open `http://localhost:3000` in your web browser.
