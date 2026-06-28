@@ -71,7 +71,7 @@ def get_cache_path(filename: str, pitch_hz: float, start: float, end: float, str
     key = f"{filename}|{pitch_hz:.6f}|{start:.3f}|{end:.3f}|{stretch:.4f}"
     h = hashlib.sha256(key.encode()).hexdigest()[:12]
     safe_name = filename.replace(' ', '_').replace('/', '_')
-    return CACHE_DIR / f"{safe_name}_{h}.wav"
+    return CACHE_DIR / f"{safe_name}_{h}.ogg"
 
 # ── File Locking & Cache Management ─────────────────────────────
 file_locks = {}
@@ -88,10 +88,10 @@ def cleanup_cache_thread():
     """Background thread to keep audio_cache under 500MB (cleans to 400MB)."""
     while True:
         try:
-            total_size = sum(f.stat().st_size for f in CACHE_DIR.glob('*.wav') if f.is_file())
+            total_size = sum(f.stat().st_size for f in CACHE_DIR.glob('*.ogg') if f.is_file())
             if total_size > 500 * 1024 * 1024: # 500 MB
                 log.info(f"Cache size ({total_size / 1024 / 1024:.1f} MB) exceeded 500MB. Cleaning up...")
-                files = sorted(CACHE_DIR.glob('*.wav'), key=lambda x: x.stat().st_atime)
+                files = sorted(CACHE_DIR.glob('*.ogg'), key=lambda x: x.stat().st_atime)
                 
                 for f in files:
                     try:
@@ -117,38 +117,36 @@ threading.Thread(target=cleanup_cache_thread, daemon=True).start()
 def pitch_shift_file(input_path: pathlib.Path, output_path: pathlib.Path, pitch_hz: float, start: float, end: float, stretch: float):
     """
     Extract segment, time-stretch to target tempo, and pitch-shift to the target pitch using Pedalboard (C++ native).
+    Streams directly in memory (zero disk I/O), applies seamless loop fading, and compresses to OGG Vorbis.
     """
     n_semitones = 12 * math.log2(pitch_hz / BASE_HZ)
     duration = end - start if end > 0 else None
     log.info(f"Processing {input_path.name}: start={start:.2f}s, dur={duration}, stretch={stretch:.3f}x, pitch={n_semitones:.3f} semitones")
 
     try:
-        import tempfile
         from pedalboard import time_stretch
         
-        # Decode AAC to WAV and slice via ffmpeg first
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
-            temp_wav_path = temp_wav.name
-            
+        # Stream AAC to raw f32le PCM in memory via ffmpeg stdout
         ffmpeg_cmd = ["ffmpeg", "-y", "-i", str(input_path)]
         if start > 0:
             ffmpeg_cmd.extend(["-ss", str(start)])
         if duration is not None:
             ffmpeg_cmd.extend(["-t", str(duration)])
-        ffmpeg_cmd.extend(["-ar", "44100", "-ac", "1", temp_wav_path])
+        ffmpeg_cmd.extend(["-ar", "44100", "-ac", "1", "-f", "f32le", "-"])
         
-        subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        raw_audio, _ = proc.communicate()
+        
+        if proc.returncode != 0 or len(raw_audio) == 0:
+            raise Exception("FFmpeg extraction failed or returned zero bytes")
 
-        # 1. Load Audio
-        y, sr = sf.read(temp_wav_path)
+        # 1. Load Audio from Memory
+        y = np.frombuffer(raw_audio, dtype=np.float32)
+        sr = 44100
         
         # 2. Time Stretch & Pitch Shift simultaneously in C++ via Pedalboard
-        # Pedalboard requires float32 shape (channels, samples), but for mono sf.read returns (samples,)
-        if y.ndim == 1:
-            y = np.expand_dims(y, axis=0) # Make it (1, samples)
-        y = y.astype(np.float32)
+        y = np.expand_dims(y, axis=0) # Make it (1, samples)
 
-        # Pedalboard handles both seamlessly!
         y_processed = time_stretch(
             y, 
             sr, 
@@ -157,24 +155,26 @@ def pitch_shift_file(input_path: pathlib.Path, output_path: pathlib.Path, pitch_
             high_quality=True
         )
 
-        # 3. Save
-        # sf.write expects (samples, channels)
         if y_processed.ndim == 2 and y_processed.shape[0] == 1:
             y_processed = y_processed.squeeze(0)
+
+        # 3. Apply Server-Side Seamless Loop Fade (15ms)
+        # Replaces the CPU-heavy applySeamlessFold in JS
+        fade_ms = 15
+        fade_samples = int((fade_ms / 1000) * sr)
+        if fade_samples * 2 < len(y_processed):
+            t = np.sin(np.linspace(0, np.pi/2, fade_samples, dtype=np.float32))
+            y_processed[:fade_samples] *= t
+            y_processed[-fade_samples:] *= t[::-1]
             
-        sf.write(str(output_path), y_processed, sr, subtype='PCM_16')
+        # 4. Save directly as highly compressed OGG Vorbis
+        sf.write(str(output_path), y_processed, sr, format='OGG', subtype='VORBIS')
         
-        os.unlink(temp_wav_path)
-        log.info(f"  -> Processed via Pedalboard: {output_path.name}")
+        log.info(f"  -> Processed via Pedalboard (OGG): {output_path.name}")
         return
         
     except Exception as e:
-        log.error(f"Processing failed: {e}")
-        try:
-            if 'temp_wav_path' in locals() and os.path.exists(temp_wav_path):
-                os.unlink(temp_wav_path)
-        except:
-            pass
+        log.error(f"Processing failed: {e}", exc_info=True)
 
 
 # ── API Routes ───────────────────────────────────────────────────
@@ -224,7 +224,7 @@ def serve_audio():
                 log.error(f"Pitch shift failed: {e}", exc_info=True)
                 return jsonify({'error': 'Audio processing failed', 'detail': str(e)}), 500
 
-    response = send_file(cache_path, mimetype='audio/wav')
+    response = send_file(cache_path, mimetype='audio/ogg')
     response.headers['Cache-Control'] = 'public, max-age=86400'
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response

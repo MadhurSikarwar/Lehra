@@ -637,7 +637,7 @@ async function fetchAndDecode(url, targetDurSec) {
     setStatus('Decoding audio…', 'loading');
     const copy = cachedBuf.slice(0); // slice prevents detaching the cached original
     const decoded = await audioCtx.decodeAudioData(copy);
-    return applySeamlessFold(decoded, targetDurSec);
+    return decoded;
   }
 
   const res = await fetch(url);
@@ -658,66 +658,9 @@ async function fetchAndDecode(url, targetDurSec) {
   // Cache ONLY if decode succeeds
   await cacheAudio(url, arrayBuf);
   
-  return applySeamlessFold(decoded, targetDurSec);
+  return decoded;
 }
 
-function applySeamlessFold(audioBuffer, targetDurSec) {
-  if (!targetDurSec) {
-    applyQuickFades(audioBuffer, 15);
-    return audioBuffer;
-  }
-  
-  const sampleRate = audioBuffer.sampleRate;
-  const targetLen = Math.floor(targetDurSec * sampleRate);
-  const fadeSamples = audioBuffer.length - targetLen;
-  
-  if (fadeSamples <= 100) {
-    applyQuickFades(audioBuffer, 15);
-    return audioBuffer;
-  }
-
-  const newBuffer = audioCtx.createBuffer(
-    audioBuffer.numberOfChannels,
-    targetLen,
-    sampleRate
-  );
-
-  for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
-    const origData = audioBuffer.getChannelData(c);
-    const newData = newBuffer.getChannelData(c);
-    
-    for (let i = fadeSamples; i < targetLen; i++) {
-      newData[i] = origData[i];
-    }
-    
-    for (let i = 0; i < fadeSamples; i++) {
-      const t = i / fadeSamples;
-      const fadeIn = Math.sin(t * (Math.PI / 2));
-      const fadeOut = Math.cos(t * (Math.PI / 2));
-      
-      const startSample = origData[i];
-      const tailSample = origData[targetLen + i];
-      
-      newData[i] = startSample * fadeIn + tailSample * fadeOut;
-    }
-  }
-  return newBuffer;
-}
-
-function applyQuickFades(audioBuffer, fadeMs = 15) {
-  const sampleRate = audioBuffer.sampleRate;
-  const fadeSamples = Math.floor((fadeMs / 1000) * sampleRate);
-  if (fadeSamples * 2 > audioBuffer.length) return;
-  for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
-    const data = audioBuffer.getChannelData(c);
-    const len = data.length;
-    for (let i = 0; i < fadeSamples; i++) {
-      const t = Math.sin((i / fadeSamples) * (Math.PI / 2));
-      data[i] *= t;
-      data[len - 1 - i] *= t;
-    }
-  }
-}
 
 // ── Create and start source node ─────────────────────────────────
 function stopLehraSource(fadeOutMs = 0) {
