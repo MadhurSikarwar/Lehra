@@ -617,7 +617,6 @@ function initNotationStudio() {
 }
 
 // 9. Notation Playback Engine
-let nsAudioCtx = null;
 let nsPlaying = false;
 let nsNextNoteTime = 0;
 let nsCurrentMatra = 0;
@@ -639,11 +638,11 @@ function getFrequency(swara) {
 }
 
 function playTone(freq, time, dur) {
-  if (!nsAudioCtx) return;
-  const osc = nsAudioCtx.createOscillator();
-  const gain = nsAudioCtx.createGain();
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
   osc.connect(gain);
-  gain.connect(nsAudioCtx.destination);
+  gain.connect(audioCtx.destination);
   osc.type = 'sine';
   osc.frequency.value = freq;
   gain.gain.setValueAtTime(0.01, time);
@@ -655,26 +654,26 @@ function playTone(freq, time, dur) {
 }
 
 function playNoise(time, dur) {
-  if (!nsAudioCtx) return;
-  const bufferSize = nsAudioCtx.sampleRate * dur;
-  const buffer = nsAudioCtx.createBuffer(1, bufferSize, nsAudioCtx.sampleRate);
+  if (!audioCtx) return;
+  const bufferSize = audioCtx.sampleRate * dur;
+  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
   const data = buffer.getChannelData(0);
   for (let i = 0; i < bufferSize; i++) {
     data[i] = Math.random() * 2 - 1;
   }
-  const noise = nsAudioCtx.createBufferSource();
+  const noise = audioCtx.createBufferSource();
   noise.buffer = buffer;
-  const gain = nsAudioCtx.createGain();
+  const gain = audioCtx.createGain();
   gain.gain.setValueAtTime(0.3, time);
   gain.gain.exponentialRampToValueAtTime(0.01, time + dur);
   noise.connect(gain);
-  gain.connect(nsAudioCtx.destination);
+  gain.connect(audioCtx.destination);
   noise.start(time);
 }
 
 function nsScheduler() {
   if (!nsPlaying) return;
-  while (nsNextNoteTime < nsAudioCtx.currentTime + nsScheduleAheadTime) {
+  while (nsNextNoteTime < audioCtx.currentTime + nsScheduleAheadTime) {
     nsScheduleNote(nsCurrentLine, nsCurrentMatra, nsNextNoteTime);
     nsAdvanceNote();
   }
@@ -694,9 +693,9 @@ function nsScheduleNote(lineIdx, matraIdx, time) {
      const cells = document.querySelectorAll('.grid-row')[lineIdx]?.querySelectorAll('.cell-content');
      if (cells && cells[matraIdx]) {
        cells[matraIdx].style.background = 'rgba(245,166,35,0.15)';
-       cells[matraIdx].style.border = '1px dashed var(--gold)';
+       cells[matraIdx].style.border = '2px solid var(--accent)';
      }
-  }, Math.max(0, (time - nsAudioCtx.currentTime) * 1000));
+  }, Math.max(0, (time - audioCtx.currentTime) * 1000));
 
   let bpm = 100;
   const tempoVal = document.getElementById('tempoValue')?.textContent;
@@ -756,16 +755,16 @@ function toggleNotationPlayback() {
        el.style.border = '';
     });
   } else {
-    if (!nsAudioCtx) {
-      nsAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
-    if (nsAudioCtx.state === 'suspended') {
-      nsAudioCtx.resume();
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
     }
     nsPlaying = true;
     nsCurrentLine = 0;
     nsCurrentMatra = 0;
-    nsNextNoteTime = nsAudioCtx.currentTime + 0.1;
+    nsNextNoteTime = audioCtx.currentTime + 0.1;
     document.getElementById('nsPlayIcon').style.display = 'none';
     document.getElementById('nsPauseIcon').style.display = '';
     nsScheduler();

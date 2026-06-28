@@ -628,18 +628,34 @@ async function cacheAudio(url, arrayBuffer) {
 }
 
 // ── Fetch + Decode audio ──────────────────────────────────────────
+const decodedCache = new Map();
+const MAX_DECODED_CACHE_SIZE = 15;
+
 async function fetchAndDecode(url, targetDurSec) {
+  // 1. Check in-memory decoded cache (Instant load, 0 CPU)
+  if (decodedCache.has(url)) {
+    return decodedCache.get(url);
+  }
+
   setStatus('Processing audio…', 'loading');
   setBadge('Processing…', true);
 
+  // 2. Check IndexedDB cache (Requires CPU decodeAudioData)
   const cachedBuf = await getCachedAudio(url);
   if (cachedBuf) {
     setStatus('Decoding audio…', 'loading');
     const copy = cachedBuf.slice(0); // slice prevents detaching the cached original
     const decoded = await audioCtx.decodeAudioData(copy);
+    
+    // Add to memory cache
+    decodedCache.set(url, decoded);
+    if (decodedCache.size > MAX_DECODED_CACHE_SIZE) {
+      decodedCache.delete(decodedCache.keys().next().value); // Evict oldest
+    }
     return decoded;
   }
 
+  // 3. Fetch from network
   const res = await fetch(url);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -655,8 +671,14 @@ async function fetchAndDecode(url, targetDurSec) {
   
   const decoded = await audioCtx.decodeAudioData(arrayBuf.slice(0));
   
-  // Cache ONLY if decode succeeds
+  // Cache in IndexedDB ONLY if decode succeeds
   await cacheAudio(url, arrayBuf);
+  
+  // Add to memory cache
+  decodedCache.set(url, decoded);
+  if (decodedCache.size > MAX_DECODED_CACHE_SIZE) {
+    decodedCache.delete(decodedCache.keys().next().value); // Evict oldest
+  }
   
   return decoded;
 }
