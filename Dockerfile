@@ -1,9 +1,9 @@
 # Stage 1: Build C++ sidecar
 FROM python:3.11-slim as builder
-RUN apt-get update && apt-get install -y --no-install-recommends g++ libsoundtouch-dev
+RUN apt-get update && apt-get install -y --no-install-recommends g++ libsoundtouch-dev pkg-config
 WORKDIR /build
 COPY cpp_sidecar /build/cpp_sidecar
-RUN g++ -O3 -std=c++17 -pthread cpp_sidecar/main.cpp -lsoundtouch -o peaks_server
+RUN g++ -O3 -std=c++17 -pthread cpp_sidecar/main.cpp $(pkg-config --cflags --libs soundtouch) -o peaks_server
 
 # Stage 2: Final runtime
 FROM python:3.11-slim
