@@ -46,6 +46,8 @@
 using json = nlohmann::json;
 using namespace soundtouch;
 
+#include <cstdint>
+
 // ── Pitch & Time Stretching (SoundTouch) ────────────────────────────────────
 static bool process_audio_file(const std::string& in_path, const std::string& out_path, float pitch_semitones, float tempo) {
     unsigned int channels;
@@ -69,12 +71,12 @@ static bool process_audio_file(const std::string& in_path, const std::string& ou
     // Pitch shift in semitones
     st.setPitchSemiTones(pitch_semitones);
 
-    st.putSamples(pSampleData, totalPCMFrameCount);
+    st.putSamples(pSampleData, static_cast<unsigned int>(totalPCMFrameCount));
     drwav_free(pSampleData, nullptr);
 
     // Read back processed samples
     std::vector<float> outBuffer;
-    outBuffer.reserve(totalPCMFrameCount * 2 * channels); // rough estimate
+    outBuffer.reserve(static_cast<size_t>(totalPCMFrameCount * 2 * channels)); // rough estimate
     
     float temp[4096 * 2]; // up to stereo
     unsigned int numSamples = 0;
