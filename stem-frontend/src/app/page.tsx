@@ -24,6 +24,9 @@ import WaveSurfer from "wavesurfer.js";
 const API_BASE = process.env.NODE_ENV === "development" 
   ? "http://localhost:5000" 
   : (process.env.NEXT_PUBLIC_API_BASE || ""); // Allows pointing to an external backend URL if frontend is hosted separately
+
+const STEMS = ["vocals", "drums", "bass", "guitar", "piano", "other"] as const;
+
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -85,10 +88,10 @@ export default function Home() {
       console.log('Upload successful. Job ID:', data.job_id);
       setJobId(data.job_id);
       setStatus("queued");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Catch Error:', err);
       setStatus("error");
-      setErrorMsg(err.message || "Upload failed.");
+      setErrorMsg(err instanceof Error ? err.message : "Upload failed.");
     }
   };
 
@@ -374,8 +377,6 @@ export default function Home() {
 
 // Separate component for the Multi-track Player
 function StemPlayer({ jobId, onReset, fileName }: { jobId: string, onReset: () => void, fileName: string }) {
-  const stems = ["vocals", "drums", "bass", "guitar", "piano", "other"];
-  
   const [isPlaying, setIsPlaying] = useState(false);
   const wsRefs = useRef<{ [key: string]: WaveSurfer | null }>({});
   const containerRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
@@ -393,7 +394,6 @@ function StemPlayer({ jobId, onReset, fileName }: { jobId: string, onReset: () =
   // Fetch pre-computed peaks once when the player mounts
   useEffect(() => {
     let cancelled = false;
-    setPeaksLoading(true);
     fetch(`${API_BASE}/api/stems_peaks/${jobId}`)
       .then(res => {
         if (!res.ok) throw new Error(`Peaks fetch failed: ${res.status}`);
@@ -421,7 +421,7 @@ function StemPlayer({ jobId, onReset, fileName }: { jobId: string, onReset: () =
     // Wait until the peaks response arrives (even if empty) before creating instances
     if (peaksLoading) return;
 
-    stems.forEach(stem => {
+    STEMS.forEach(stem => {
       if (containerRefs.current[stem] && !wsRefs.current[stem]) {
         const stemColor: Record<string, { wave: string; progress: string }> = {
           vocals: { wave: 'rgba(245, 166, 35, 0.2)',  progress: 'rgba(245, 166, 35, 1)' },
@@ -464,7 +464,7 @@ function StemPlayer({ jobId, onReset, fileName }: { jobId: string, onReset: () =
 
         ws.on('interaction', (newTime: number) => {
           const progress = newTime / ws.getDuration();
-          stems.forEach(s => {
+          STEMS.forEach(s => {
             if (s !== stem && wsRefs.current[s]) {
               wsRefs.current[s]!.seekTo(progress);
             }
@@ -476,19 +476,20 @@ function StemPlayer({ jobId, onReset, fileName }: { jobId: string, onReset: () =
       }
     });
 
+    const currentWsRefs = wsRefs.current;
     return () => {
-      stems.forEach(stem => {
-        if (wsRefs.current[stem]) {
-          wsRefs.current[stem]!.destroy();
-          wsRefs.current[stem] = null;
+      STEMS.forEach(stem => {
+        if (currentWsRefs[stem]) {
+          currentWsRefs[stem]!.destroy();
+          currentWsRefs[stem] = null;
         }
       });
     };
   // Re-run when peaks arrive (peaksLoading becomes false)
-  }, [jobId, peaksLoading]);
+  }, [jobId, peaksLoading, peaks]);
 
   useEffect(() => {
-    stems.forEach(stem => {
+    STEMS.forEach(stem => {
       const ws = wsRefs.current[stem];
       if (ws) {
         let actualVolume = volumes[stem];
@@ -501,9 +502,13 @@ function StemPlayer({ jobId, onReset, fileName }: { jobId: string, onReset: () =
   const togglePlay = () => {
     const newState = !isPlaying;
     setIsPlaying(newState);
-    stems.forEach(stem => {
+    STEMS.forEach(stem => {
       if (wsRefs.current[stem]) {
-        newState ? wsRefs.current[stem]!.play() : wsRefs.current[stem]!.pause();
+        if (newState) {
+          wsRefs.current[stem]!.play();
+        } else {
+          wsRefs.current[stem]!.pause();
+        }
       }
     });
   };
@@ -554,7 +559,7 @@ function StemPlayer({ jobId, onReset, fileName }: { jobId: string, onReset: () =
       </div>
 
       <div className="flex flex-col gap-8 md:gap-10">
-        {stems.map((stem) => {
+        {STEMS.map((stem) => {
           const isMuted = mutes[stem] || (isSoloActive && !solos[stem]);
           
           return (

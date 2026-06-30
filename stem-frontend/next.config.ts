@@ -4,7 +4,10 @@ const nextConfig: NextConfig = {
   output: "export",
   basePath: "/separator",
   trailingSlash: true,
-  images: { unoptimized: true }
+  images: { unoptimized: true },
+  turbopack: {
+    root: process.cwd(),
+  },
 };
 
 export default nextConfig;

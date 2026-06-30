@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import "./globals.css";
+
+/* eslint-disable @next/next/no-page-custom-font, @next/next/no-css-tags */
 
 export const metadata: Metadata = {
   title: "AI Stem Separator | Swaralaya",
@@ -30,7 +33,7 @@ export default function RootLayout({
 
         {/* Header */}
         <header className="site-header">
-          <a href="/" style={{ textDecoration: 'none', color: 'inherit' }}>
+          <Link href="/" style={{ textDecoration: 'none', color: 'inherit' }}>
             <div className="logo">
               <svg className="logo-icon" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <circle cx="20" cy="20" r="18" stroke="url(#grad)" strokeWidth="2" />
@@ -47,12 +50,12 @@ export default function RootLayout({
                 <span className="logo-sub">Indian Classical Practice</span>
               </div>
             </div>
-          </a>
+          </Link>
           
           <nav className="site-nav">
-            <a className="nav-btn" href="/carnatic" style={{textDecoration: 'none'}}>Carnatic</a>
-            <a className="nav-btn" href="/hindustani" style={{textDecoration: 'none'}}>Hindustani</a>
-            <a className="nav-btn active" href="/separator/" style={{textDecoration: 'none'}}>STEM</a>
+            <Link className="nav-btn" href="/carnatic" style={{textDecoration: 'none'}}>Carnatic</Link>
+            <Link className="nav-btn" href="/hindustani" style={{textDecoration: 'none'}}>Hindustani</Link>
+            <Link className="nav-btn active" href="/separator/" style={{textDecoration: 'none'}}>STEM</Link>
           </nav>
           <div className="header-right">
             <div className="header-badge" id="loadingBadge">Web Player</div>
